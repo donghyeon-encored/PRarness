@@ -37,8 +37,16 @@ procedure.
 - Install a repository-scoped GitHub App with only the permissions required by
   the deterministic publisher.
 - Add `AGENT_APP_ID` as a repository variable.
-- Add `AGENT_APP_PRIVATE_KEY` and the selected provider API keys as repository
-  secrets through GitHub settings. Never place their values in this checkout.
+- Add `AGENT_APP_PRIVATE_KEY` as a repository secret. Never place its value in
+  this checkout or expose it to a Cloud relay job.
+- Keep the ChatGPT-authenticated host outside GitHub Actions. For a public
+  repository, do not register that account as a self-hosted runner or copy
+  `auth.json` into Actions.
+- Configure the pinned CLI path only in the external relay's local service
+  configuration; never expose that service account to repository jobs.
+- Create a secret-free, repository-specific Codex Cloud environment and add its
+  ID as the `CODEX_CLOUD_ENV_ID` repository variable. Disable agent internet and
+  keep GitHub credentials out of setup and maintenance scripts.
 - Run `npm ci --ignore-scripts`, `npm run lint`, and `npm test` on the exact
   source snapshot that will be published.
 

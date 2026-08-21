@@ -13,6 +13,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { basename, dirname, extname, join, normalize, posix, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { validateCloudRequest } from "./cloud-bridge.mjs";
 
 const PIPELINE_VERSION = 1;
 const STATE_MARKER = "issue-review-state:v1";
@@ -299,6 +300,30 @@ export function loadTeam(teamPath = ".github/agent-pipeline/team.yaml") {
     logins.add(lower(person.github));
   }
   return team;
+}
+
+export function cloudPolicyProjection(team) {
+  const pipeline = team.pipeline;
+  return {
+    version: team.version,
+    pipeline: {
+      bootstrap_agent: pipeline.bootstrap_agent,
+      fallback_assignee: pipeline.fallback_assignee,
+      max_auto_iterations: pipeline.max_auto_iterations,
+      unknown_risk_is_high: pipeline.unknown_risk_is_high,
+      change_scope: pipeline.change_scope,
+      protected_paths: asArray(pipeline.protected_paths).map(String),
+      validation_commands: asArray(pipeline.validation_commands).map(String),
+      risk_policy: pipeline.risk_policy,
+    },
+    people: team.people.map((person) => ({
+      github: person.github,
+      active: person.active,
+      main_agent: person.main_agent,
+      responsibilities: person.responsibilities ?? {},
+      review: person.review ?? {},
+    })),
+  };
 }
 
 function globSegment(segment) {
@@ -3166,6 +3191,10 @@ Usage: node pipeline.mjs <command> [options]
 Read-only policy/data commands (JSON stdout; all accept --output FILE):
   validate-team       --team FILE
   validation-commands --team FILE
+  build-cloud-request --stage NAME --request-id ID --repository OWNER/REPO
+                      --environment ID --cli-version VERSION --source-sha SHA
+                      --subject-sha SHA --prompt FILE --schema FILE --context FILE
+                      [--allowed-paths FILE]
   gate-event          --event FILE [--event-name NAME] [--team FILE]
                       [--enriched-output FILE]
   route-agent         --team FILE [--assignee LOGIN | --triage FILE]
@@ -3219,6 +3248,29 @@ export async function runCli(argv = process.argv.slice(2)) {
     return emit(asArray(team.pipeline?.validation_commands).map(String), args, {
       githubValue: { commands_json: asArray(team.pipeline?.validation_commands).map(String) },
     });
+  }
+  if (command === "build-cloud-request") {
+    const stage = requiredArg(args, "stage");
+    const requestId = requiredArg(args, "request_id");
+    const prompt = rawInput(requiredArg(args, "prompt"), "--prompt");
+    const policy = cloudPolicyProjection(loadTeam(teamPath));
+    const request = {
+      version: 1,
+      request_id: requestId,
+      stage,
+      source_sha: requiredArg(args, "source_sha"),
+      subject_sha: requiredArg(args, "subject_sha"),
+      repository: requiredArg(args, "repository"),
+      environment_id: requiredArg(args, "environment"),
+      attempts: 1,
+      expected_cli_version: requiredArg(args, "cli_version"),
+      result_path: `.agent-cloud-output/${requestId}/${stage}.json`,
+      allowed_paths: args.allowed_paths ? readPaths(args.allowed_paths) : [],
+      instructions: `${prompt}\n\n## Trusted deterministic policy projection\n\n${JSON.stringify(policy)}`,
+      context: readJsonish(requiredArg(args, "context"), "--context"),
+      payload_schema: readJsonish(requiredArg(args, "schema"), "--schema"),
+    };
+    return emit(validateCloudRequest(request), args);
   }
   if (command === "gate-event" || command === "gate") {
     const team = loadTeam(teamPath);

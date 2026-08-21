@@ -7,7 +7,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "lint": "node --check pipeline.mjs",
+    "lint": "node --check pipeline.mjs && node --check cloud-bridge.mjs",
     "test": "node --test test/*.test.mjs"
   }
 }

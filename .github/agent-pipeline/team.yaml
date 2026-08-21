@@ -78,7 +78,8 @@ pipeline:
     - ".github/agent-pipeline/**"
     - "CODEOWNERS"
     - "docs/git-ground-rules.md"
-    - "AGENTS.md"
+    - "**/AGENTS.md"
+    - "**/AGENTS.override.md"
     - "CLAUDE.md"
     - "**/*.pem"
     - "**/.env*"
@@ -125,7 +126,7 @@ people:
 
   - github: frontend-owner
     active: true
-    main_agent: claude
+    main_agent: codex
 
     responsibilities:
       domains:
