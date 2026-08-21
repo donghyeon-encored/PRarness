@@ -48,6 +48,8 @@ env:
   PIPELINE: .github/agent-pipeline/pipeline.mjs
   TEAM: .github/agent-pipeline/team.yaml
   NODE_VERSION: "22"
+  CODEX_CLOUD_CLI_VERSION: "0.145.0"
+  CODEX_CLOUD_ENV_ID: ${{ vars.CODEX_CLOUD_ENV_ID }}
   # Used only by the deterministic controller to authenticate canonical state
   # comments. The App private key and write token are never exposed globally.
   AGENT_APP_ID: ${{ vars.AGENT_APP_ID }}
@@ -312,18 +314,18 @@ jobs:
       agent: ${{ steps.effective-route.outputs.agent }}
       assignee: ${{ steps.owner.outputs.assignee }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ needs.gate.outputs.base_sha || github.event.repository.default_branch }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
           cache-dependency-path: .github/agent-pipeline/package-lock.json
       - run: npm ci --ignore-scripts --prefix .github/agent-pipeline
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: gate-context-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/issue-review
@@ -337,54 +339,33 @@ jobs:
           cp "$RUN_DIR/event.json" .agent-runtime/event.json
           cp "$RUN_DIR/state.json" .agent-runtime/state.json
 
-      - name: Select bootstrap provider
+      - name: Select bootstrap execution route
         id: bootstrap-route
         env:
           RUN_DIR: ${{ runner.temp }}/issue-review
         run: node "$PIPELINE" route-agent --team "$TEAM" --output "$RUN_DIR/bootstrap-route.json"
 
-      - name: Compact Claude schema
-        id: triage-schema
-        run: |
-          schema=$(jq -c 'walk(if type == "object" then del(.description,.title,.["$id"],.["$schema"]) else . end)' \
-            .github/agent-pipeline/schemas/triage.schema.json)
-          echo "json=$schema" >> "$GITHUB_OUTPUT"
-
-      - name: Run Codex triage
-        id: codex-triage
-        if: steps.bootstrap-route.outputs.agent == 'codex'
-        uses: openai/codex-action@v1
-        with:
-          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
-          permission-profile: ":read-only"
-          allow-bots: true
-          allow-bot-users: ${{ github.actor }}
-          output-schema-file: .github/agent-pipeline/schemas/triage.schema.json
-          output-file: .agent-runtime/triage.raw.json
-          prompt: |
-            Follow .github/agent-pipeline/prompts/triage.md exactly.
-            Read the approved event from .agent-runtime/event.json and recovered state from .agent-runtime/state.json.
-
-      - name: Run Claude triage
-        id: claude-triage
-        if: steps.bootstrap-route.outputs.agent == 'claude'
-        uses: anthropics/claude-code-action@v1
-        with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          allowed_bots: ${{ github.actor }}
-          prompt: |
-            Follow .github/agent-pipeline/prompts/triage.md exactly.
-            Read the approved event from .agent-runtime/event.json and recovered state from .agent-runtime/state.json.
-          claude_args: >-
-            --json-schema '${{ steps.triage-schema.outputs.json }}'
-            --allowedTools Read,Glob,Grep
-            --disallowedTools WebFetch,WebSearch,Write,Edit,Bash
-
-      - name: Capture Claude structured output
-        if: steps.bootstrap-route.outputs.agent == 'claude'
+      - name: Build immutable Cloud triage request
         env:
-          STRUCTURED_OUTPUT: ${{ steps.claude-triage.outputs.structured_output }}
-        run: printf '%s\n' "$STRUCTURED_OUTPUT" > .agent-runtime/triage.raw.json
+          RUN_DIR: ${{ runner.temp }}/issue-review
+          SOURCE_SHA: ${{ needs.gate.outputs.base_sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          jq -n --slurpfile issue "$RUN_DIR/source-issue.json" --slurpfile state "$RUN_DIR/state.json" \
+            '{issue:$issue[0],state:$state[0]}' > "$RUN_DIR/triage.cloud-context.json"
+          node "$PIPELINE" build-cloud-request --stage triage \
+            --team "$TEAM" \
+            --request-id "gh-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-triage" \
+            --repository "$GITHUB_REPOSITORY" --environment "$CODEX_CLOUD_ENV_ID" \
+            --cli-version "$CODEX_CLOUD_CLI_VERSION" --source-sha "$SOURCE_SHA" --subject-sha "$SOURCE_SHA" \
+            --prompt .github/agent-pipeline/prompts/triage.md \
+            --schema .github/agent-pipeline/schemas/triage.schema.json \
+            --context "$RUN_DIR/triage.cloud-context.json" --output "$RUN_DIR/triage.cloud-request.json"
+
+      - name: Stop at the external Codex Cloud relay boundary
+        run: |
+          echo '::error title=External Codex Cloud relay required::The SHA-bound request was archived; authenticated Cloud execution is disabled in this public repository.'
+          exit 1
 
       - name: Normalize and deterministically select owner
         id: owner
@@ -408,7 +389,8 @@ jobs:
           ASSIGNEE: ${{ steps.owner.outputs.assignee }}
         run: node "$PIPELINE" route-agent --team "$TEAM" --assignee "$ASSIGNEE" --output "$RUN_DIR/route.json"
 
-      - uses: actions/upload-artifact@v7
+      - if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: triage-context-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/issue-review/
@@ -430,18 +412,18 @@ jobs:
       human_required: ${{ steps.plan.outputs.human_required }}
       units_json: ${{ steps.plan.outputs.units_json }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ needs.gate.outputs.base_sha || github.event.repository.default_branch }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
           cache-dependency-path: .github/agent-pipeline/package-lock.json
       - run: npm ci --ignore-scripts --prefix .github/agent-pipeline
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: triage-context-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/issue-review
@@ -465,48 +447,28 @@ jobs:
           cp "$RUN_DIR/triage.json" .agent-runtime/triage.json
           cp "$RUN_DIR/codegraph.json" .agent-runtime/codegraph.json
 
-      - name: Compact Claude schema
-        id: plan-schema
-        run: |
-          schema=$(jq -c 'walk(if type == "object" then del(.description,.title,.["$id"],.["$schema"]) else . end)' \
-            .github/agent-pipeline/schemas/plan.schema.json)
-          echo "json=$schema" >> "$GITHUB_OUTPUT"
-
-      - name: Run Codex diagnosis and plan
-        id: codex-plan
-        if: needs.triage.outputs.agent == 'codex'
-        uses: openai/codex-action@v1
-        with:
-          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
-          permission-profile: ":read-only"
-          allow-bots: true
-          allow-bot-users: ${{ github.actor }}
-          output-schema-file: .github/agent-pipeline/schemas/plan.schema.json
-          output-file: .agent-runtime/plan.raw.json
-          prompt: |
-            Follow .github/agent-pipeline/prompts/diagnose-plan.md exactly.
-            Runtime inputs are under .agent-runtime/. Diagnose and plan only; do not edit the checkout.
-
-      - name: Run Claude diagnosis and plan
-        id: claude-plan
-        if: needs.triage.outputs.agent == 'claude'
-        uses: anthropics/claude-code-action@v1
-        with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          allowed_bots: ${{ github.actor }}
-          prompt: |
-            Follow .github/agent-pipeline/prompts/diagnose-plan.md exactly.
-            Runtime inputs are under .agent-runtime/. Diagnose and plan only; do not edit the checkout.
-          claude_args: >-
-            --json-schema '${{ steps.plan-schema.outputs.json }}'
-            --allowedTools Read,Glob,Grep
-            --disallowedTools WebFetch,WebSearch,Write,Edit,Bash
-
-      - name: Capture Claude structured output
-        if: needs.triage.outputs.agent == 'claude'
+      - name: Build immutable Cloud planning request
         env:
-          STRUCTURED_OUTPUT: ${{ steps.claude-plan.outputs.structured_output }}
-        run: printf '%s\n' "$STRUCTURED_OUTPUT" > .agent-runtime/plan.raw.json
+          RUN_DIR: ${{ runner.temp }}/issue-review
+          SOURCE_SHA: ${{ needs.gate.outputs.base_sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          jq -n --slurpfile issue "$RUN_DIR/source-issue.json" --slurpfile state "$RUN_DIR/state.json" \
+            --slurpfile triage "$RUN_DIR/triage.json" --slurpfile graph "$RUN_DIR/codegraph.json" \
+            '{issue:$issue[0],state:$state[0],triage:$triage[0],codegraph:$graph[0]}' > "$RUN_DIR/plan.cloud-context.json"
+          node "$PIPELINE" build-cloud-request --stage plan \
+            --team "$TEAM" \
+            --request-id "gh-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-plan" \
+            --repository "$GITHUB_REPOSITORY" --environment "$CODEX_CLOUD_ENV_ID" \
+            --cli-version "$CODEX_CLOUD_CLI_VERSION" --source-sha "$SOURCE_SHA" --subject-sha "$SOURCE_SHA" \
+            --prompt .github/agent-pipeline/prompts/diagnose-plan.md \
+            --schema .github/agent-pipeline/schemas/plan.schema.json \
+            --context "$RUN_DIR/plan.cloud-context.json" --output "$RUN_DIR/plan.cloud-request.json"
+
+      - name: Stop at the external Codex Cloud relay boundary
+        run: |
+          echo '::error title=External Codex Cloud relay required::The SHA-bound request was archived; authenticated Cloud execution is disabled in this public repository.'
+          exit 1
 
       - name: Normalize and reconcile plan with trusted state and policy
         id: plan
@@ -596,7 +558,8 @@ jobs:
           fi
           echo "units_json=$(cat "$RUN_DIR/units.json")" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/upload-artifact@v7
+      - if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: analysis-context-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/issue-review/
@@ -814,31 +777,31 @@ jobs:
     steps:
       # All executable policy, prompts, and schemas stay on the trusted base.
       # The PR head is nested data and is never used to install the orchestrator.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ needs.verify-pr.outputs.base_sha || github.event.repository.default_branch }}
           fetch-depth: 0
           persist-credentials: false
       - name: Check out PR head as review data
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ needs.gate.outputs.checkout_ref }}
           fetch-depth: 0
           persist-credentials: false
           path: pr-head
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
           cache-dependency-path: .github/agent-pipeline/package-lock.json
       - run: npm ci --ignore-scripts --prefix .github/agent-pipeline
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: "{gate-context,pr-verification}-${{ github.run_id }}-${{ github.run_attempt }}"
           merge-multiple: true
           path: ${{ runner.temp }}/issue-review
 
-      - name: Recover effective provider from canonical owner
+      - name: Recover effective Cloud route from canonical owner
         id: route
         env:
           RUN_DIR: ${{ runner.temp }}/issue-review
@@ -889,50 +852,35 @@ jobs:
           cp "$RUN_DIR/pr-team.json" .agent-runtime/pr-team.json
           printf '%s\n' '${{ needs.verify-pr.outputs.head_sha }}' > .agent-runtime/head-sha.txt
 
-      - name: Compact Claude schema
-        id: review-schema
-        run: |
-          schema=$(jq -c 'walk(if type == "object" then del(.description,.title,.["$id"],.["$schema"]) else . end)' \
-            .github/agent-pipeline/schemas/review.schema.json)
-          echo "json=$schema" >> "$GITHUB_OUTPUT"
-
-      - name: Run Codex review
-        id: codex-review
-        if: steps.route.outputs.agent == 'codex'
-        uses: openai/codex-action@v1
-        with:
-          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
-          permission-profile: ":read-only"
-          allow-bots: true
-          allow-bot-users: ${{ github.actor }}
-          output-schema-file: .github/agent-pipeline/schemas/review.schema.json
-          output-file: .agent-runtime/review.raw.json
-          prompt: |
-            Follow .github/agent-pipeline/prompts/review.md exactly.
-            The untrusted PR head is under pr-head/ and immutable evidence is under .agent-runtime/.
-            Review only that PR head and exact SHA. Do not edit or publish.
-
-      - name: Run Claude review
-        id: claude-review
-        if: steps.route.outputs.agent == 'claude'
-        uses: anthropics/claude-code-action@v1
-        with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          allowed_bots: ${{ github.actor }}
-          prompt: |
-            Follow .github/agent-pipeline/prompts/review.md exactly.
-            The untrusted PR head is under pr-head/ and immutable evidence is under .agent-runtime/.
-            Review only that PR head and exact SHA. Do not edit or publish.
-          claude_args: >-
-            --json-schema '${{ steps.review-schema.outputs.json }}'
-            --allowedTools Read,Glob,Grep
-            --disallowedTools WebFetch,WebSearch,Write,Edit,Bash
-
-      - name: Capture Claude structured output
-        if: steps.route.outputs.agent == 'claude'
+      - name: Build immutable Cloud review request
         env:
-          STRUCTURED_OUTPUT: ${{ steps.claude-review.outputs.structured_output }}
-        run: printf '%s\n' "$STRUCTURED_OUTPUT" > .agent-runtime/review.raw.json
+          RUN_DIR: ${{ runner.temp }}/issue-review
+          SOURCE_SHA: ${{ needs.verify-pr.outputs.base_sha }}
+          SUBJECT_SHA: ${{ needs.verify-pr.outputs.head_sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git -C pr-head rev-parse HEAD)" = "$SUBJECT_SHA"
+          jq -n --slurpfile issue "$RUN_DIR/source-issue.json" --slurpfile state "$RUN_DIR/state.json" \
+            --slurpfile plan .agent-runtime/plan.json --slurpfile graph "$RUN_DIR/codegraph.json" \
+            --slurpfile risk "$RUN_DIR/risk.json" --slurpfile validation "$RUN_DIR/validation.json" \
+            --slurpfile protected "$RUN_DIR/protected.json" --slurpfile scope "$RUN_DIR/change-scope.json" \
+            --slurpfile team "$RUN_DIR/pr-team.json" --slurpfile paths "$RUN_DIR/changed-files.json" \
+            --rawfile patch "$RUN_DIR/pr.diff" \
+            '{issue:$issue[0],state:$state[0],plan:$plan[0],codegraph:$graph[0],risk:$risk[0],validation:$validation[0],
+              protected:($protected[0] | {passed,matched,reason}),change_scope:$scope[0],pr_team:$team[0],patch:$patch,changed_paths:$paths[0]}' \
+            > "$RUN_DIR/review.cloud-context.json"
+          node "$PIPELINE" build-cloud-request --stage review \
+            --team "$TEAM" \
+            --request-id "gh-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-review" \
+            --repository "$GITHUB_REPOSITORY" --environment "$CODEX_CLOUD_ENV_ID" \
+            --cli-version "$CODEX_CLOUD_CLI_VERSION" --source-sha "$SOURCE_SHA" --subject-sha "$SUBJECT_SHA" \
+            --prompt .github/agent-pipeline/prompts/review.md --schema .github/agent-pipeline/schemas/review.schema.json \
+            --context "$RUN_DIR/review.cloud-context.json" --output "$RUN_DIR/review.cloud-request.json"
+
+      - name: Stop at the external Codex Cloud relay boundary
+        run: |
+          echo '::error title=External Codex Cloud relay required::The SHA-bound request was archived; authenticated Cloud execution is disabled in this public repository.'
+          exit 1
 
       - name: Normalize and evaluate exact All OK conditions
         id: decision
@@ -1008,7 +956,8 @@ jobs:
           jq '.state' "$RUN_DIR/review-input.json" > "$RUN_DIR/state.next.json"
           mv "$RUN_DIR/state.next.json" "$RUN_DIR/state.json"
 
-      - uses: actions/upload-artifact@v7
+      - if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: review-context-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/issue-review/
@@ -1079,36 +1028,32 @@ jobs:
       matrix:
         unit: ${{ fromJson(needs.analyze.outputs.units_json || '[{"id":null,"title":null,"branch":null}]') }}
       fail-fast: false
+      max-parallel: 1
     runs-on: ubuntu-latest
     permissions:
       contents: read
       issues: read
       pull-requests: read
     steps:
-      # As in review, policy remains on the trusted default branch. The model
-      # may edit only the nested target checkout, and no script from that tree
-      # is executed after provider credentials are introduced.
-      - uses: actions/checkout@v7
+      # As in review, policy remains on the trusted default branch. The target
+      # checkout is data; no script from it executes on the credentialed relay.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ needs.gate.outputs.base_sha || github.event.repository.default_branch }}
           persist-credentials: false
       - name: Check out implementation target as data
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ needs.gate.outputs.checkout_ref }}
           fetch-depth: 0
           persist-credentials: false
           path: worktree
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: ${{ env.NODE_VERSION }}
-      - name: Install dependencies before exposing provider credentials
-        run: |
-          npm ci --ignore-scripts --prefix .github/agent-pipeline
-          if [[ -f worktree/package-lock.json ]]; then
-            npm ci --ignore-scripts --prefix worktree
-          fi
-      - uses: actions/download-artifact@v8
+      - name: Install trusted controller dependencies
+        run: npm ci --ignore-scripts --prefix .github/agent-pipeline
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: "{analysis-context,review-context}-${{ github.run_id }}-${{ github.run_attempt }}"
           merge-multiple: true
@@ -1161,37 +1106,34 @@ jobs:
           echo "mode=$mode" >> "$GITHUB_OUTPUT"
           echo "agent=$agent" >> "$GITHUB_OUTPUT"
 
-      - name: Run Codex implementation
-        id: codex-implement
-        if: steps.context.outputs.agent == 'codex'
-        uses: openai/codex-action@v1
-        with:
-          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
-          permission-profile: ":workspace"
-          allow-bots: true
-          allow-bot-users: ${{ github.actor }}
-          output-file: .agent-runtime/implementation-summary.txt
-          prompt: |
-            Follow .github/agent-pipeline/prompts/implement.md exactly.
-            The approved event, state, plan, and optional review are under .agent-runtime/.
-            The implementation target is the nested worktree/ directory.
-            Edit only worktree/. Do not commit, push, call GitHub, or modify .agent-runtime.
+      - name: Build immutable Cloud implementation request
+        env:
+          RUN_DIR: ${{ runner.temp }}/issue-review
+          UNIT_ID: ${{ matrix.unit.id || 'main' }}
+        run: |
+          for file in review validation codegraph; do
+            test -f "$RUN_DIR/$file.json" || printf '{}\n' > "$RUN_DIR/$file.json"
+          done
+          source_sha=$(git -C worktree rev-parse HEAD)
+          jq -n --slurpfile issue "$RUN_DIR/source-issue.json" --slurpfile state "$RUN_DIR/state.json" \
+            --slurpfile plan "$RUN_DIR/plan.json" --slurpfile review "$RUN_DIR/review.json" \
+            --slurpfile validation "$RUN_DIR/validation.json" --slurpfile graph "$RUN_DIR/codegraph.json" \
+            '{issue:$issue[0],state:$state[0],plan:$plan[0],review:$review[0],validation:$validation[0],codegraph:$graph[0]}' \
+            > "$RUN_DIR/implement.cloud-context.json"
+          node "$PIPELINE" build-cloud-request --stage implement \
+            --team "$TEAM" \
+            --request-id "gh-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-implement-${UNIT_ID}" \
+            --repository "$GITHUB_REPOSITORY" --environment "$CODEX_CLOUD_ENV_ID" \
+            --cli-version "$CODEX_CLOUD_CLI_VERSION" --source-sha "$source_sha" --subject-sha "$source_sha" \
+            --prompt .github/agent-pipeline/prompts/implement.md \
+            --schema .github/agent-pipeline/schemas/implementation.schema.json \
+            --context "$RUN_DIR/implement.cloud-context.json" --allowed-paths "$RUN_DIR/plan.json" \
+            --output "$RUN_DIR/implement.cloud-request.json"
 
-      - name: Run Claude implementation
-        id: claude-implement
-        if: steps.context.outputs.agent == 'claude'
-        uses: anthropics/claude-code-action@v1
-        with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          allowed_bots: ${{ github.actor }}
-          prompt: |
-            Follow .github/agent-pipeline/prompts/implement.md exactly.
-            The approved event, state, plan, and optional review are under .agent-runtime/.
-            The implementation target is the nested worktree/ directory.
-            Edit only worktree/. Do not commit, push, call GitHub, or modify .agent-runtime.
-          claude_args: >-
-            --allowedTools Read,Glob,Grep,Edit,Write
-            --disallowedTools WebFetch,WebSearch,Bash
+      - name: Stop at the external Codex Cloud relay boundary
+        run: |
+          echo '::error title=External Codex Cloud relay required::The SHA-bound request was archived; authenticated Cloud execution is disabled in this public repository.'
+          exit 1
 
       - name: Capture tracked and untracked changes as a patch
         id: patch
@@ -1219,11 +1161,11 @@ jobs:
           if [[ -f ../.agent-runtime/implementation-summary.txt ]]; then
             cp ../.agent-runtime/implementation-summary.txt "$RUN_DIR/implementation-summary.txt"
           else
-            printf 'Claude implementation completed; deterministic verification follows.\n' \
-              > "$RUN_DIR/implementation-summary.txt"
+            printf 'Codex Cloud implementation completed; deterministic verification follows.\n' > "$RUN_DIR/implementation-summary.txt"
           fi
 
-      - uses: actions/upload-artifact@v7
+      - if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: implementation-patch-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.unit.id || 'main' }}
           path: ${{ runner.temp }}/issue-review/
@@ -1233,7 +1175,7 @@ jobs:
   verify-change:
     name: Reapply and verify patch on a fresh runner
     needs: [gate, analyze, implement]
-    if: needs.implement.result == 'success'
+    if: always() && needs.implement.result == 'success'
     # Mirrors the implement job's matrix exactly (same units_json, same
     # null-id fallback) so each unit's own artifact is verified independently.
     strategy:
