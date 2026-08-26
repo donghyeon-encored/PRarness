@@ -24,7 +24,8 @@ npm test
 ```text
 .github/agent-pipeline/pipeline.mjs  deterministic controller and GitHub helpers
 .github/agent-pipeline/cloud-bridge.mjs  Codex Cloud relay contract
-.github/agent-pipeline/cloud-github-setup.sh  Cloud remote/gh bootstrap
+.github/agent-pipeline/cloud-environment-bootstrap.sh  reusable Cloud installer
+.github/agent-pipeline/cloud-github-setup.sh  generic Cloud remote/gh bootstrap
 .github/agent-pipeline/prompts/      model stage contracts
 .github/agent-pipeline/schemas/      structured-output and state schemas
 .github/agent-pipeline/test/         policy and controller regression tests
@@ -40,13 +41,15 @@ The committed workflow contains secret names but no secret values. A human
 maintainer must review the protected workflow and ownership files, replace the
 remaining placeholder accounts in `.github/agent-pipeline/team.yaml`, install the
 repository-scoped GitHub App, and configure the referenced repository variable
-and App secret through GitHub and Codex Cloud settings. Configure the Cloud
-environment setup and maintenance scripts to run
-`bash .github/agent-pipeline/cloud-github-setup.sh OWNER/REPO`; this supplies the
-Cloud worker with `origin` and non-interactive `gh` authentication. For this
-public repository the workflow still archives SHA-bound Cloud requests and
-fails closed until the external relay return channel is connected. See [the
-Cloud relay runbook](docs/codex-cloud-migration.md).
+and App secret through GitHub and Codex Cloud settings. Configure every target
+repository's Cloud setup and maintenance scripts with the same SHA-pinned
+installer snippet from the Cloud relay runbook. The installed command detects
+the target repository from an environment value or existing Git remote and
+supplies `origin` plus non-interactive `gh` authentication without copying
+PRarness files into that repository. For this public repository the workflow
+still archives SHA-bound Cloud requests and fails closed until the external
+relay return channel is connected. See [the Cloud relay
+runbook](docs/codex-cloud-migration.md).
 
 Never commit an App private key, API key, `.env` file, local `.npmrc`, or runner
 artifact. See [the publication checklist](docs/publication-checklist.md),

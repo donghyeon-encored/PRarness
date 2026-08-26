@@ -36,7 +36,7 @@ const request = (overrides = {}) => ({
 test("validates a SHA-bound request and renders Cloud GitHub bootstrap/direct-write guidance", () => {
   assert.equal(validateCloudRequest(request()).stage, "triage");
   const query = buildCloudQuery(request());
-  assert.match(query, /cloud-github-setup\.sh owner\/repo/);
+  assert.match(query, /\.local\/bin\/prarness-github-setup --verify owner\/repo/);
   assert.match(query, /Direct GitHub work is an intended part/);
   assert.match(query, /create or update the source Issue's canonical triage/);
   assert.doesNotMatch(query, /Do not use gh|Never commit, push/);

@@ -9,12 +9,6 @@ if [[ ${1:-} == "--verify" ]]; then
   shift
 fi
 
-repository=${1:-${CODEX_GITHUB_REPOSITORY:-}}
-if [[ ! $repository =~ ^[^/[:space:]]+/[^/[:space:]]+$ ]]; then
-  echo 'Codex Cloud GitHub setup requires an owner/repository argument.' >&2
-  exit 2
-fi
-
 server_url=${CODEX_GITHUB_SERVER_URL:-https://github.com}
 host=${server_url#https://}
 host=${host#http://}
@@ -42,6 +36,73 @@ repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || {
   exit 2
 }
 cd "$repo_root"
+
+repository_from_remote_url() {
+  local url=${1:-}
+  local candidate=''
+  case "$url" in
+    "${server_url%/}/"*) candidate=${url#"${server_url%/}/"} ;;
+    "git://${host}/"*) candidate=${url#"git://${host}/"} ;;
+    "ssh://git@${host}/"*) candidate=${url#"ssh://git@${host}/"} ;;
+    "git@${host}:"*) candidate=${url#"git@${host}:"} ;;
+    *) return 1 ;;
+  esac
+  candidate=${candidate%/}
+  candidate=${candidate%.git}
+  if [[ $candidate =~ ^[^/[:space:]]+/[^/[:space:]]+$ ]]; then
+    printf '%s' "$candidate"
+    return 0
+  fi
+  return 1
+}
+
+detect_repository() {
+  local configured=${1:-${CODEX_GITHUB_REPOSITORY:-${GITHUB_REPOSITORY:-}}}
+  if [[ -n $configured ]]; then
+    printf '%s' "$configured"
+    return 0
+  fi
+
+  local remote_name remote_url candidate existing already_seen
+  if remote_url=$(git remote get-url origin 2>/dev/null) && candidate=$(repository_from_remote_url "$remote_url"); then
+    printf '%s' "$candidate"
+    return 0
+  fi
+
+  local -a candidates=()
+  while IFS= read -r remote_name; do
+    [[ -n $remote_name ]] || continue
+    remote_url=$(git remote get-url "$remote_name" 2>/dev/null) || continue
+    candidate=$(repository_from_remote_url "$remote_url") || continue
+    already_seen=false
+    for existing in "${candidates[@]-}"; do
+      if [[ $existing == "$candidate" ]]; then
+        already_seen=true
+        break
+      fi
+    done
+    if [[ $already_seen == false ]]; then
+      candidates+=("$candidate")
+    fi
+  done < <(git remote 2>/dev/null)
+
+  if (( ${#candidates[@]} == 1 )); then
+    printf '%s' "${candidates[0]}"
+    return 0
+  fi
+  if (( ${#candidates[@]} > 1 )); then
+    echo 'Codex Cloud GitHub setup found multiple GitHub repositories in the checkout remotes.' >&2
+    return 2
+  fi
+  echo 'Set CODEX_GITHUB_REPOSITORY=owner/repository when the Cloud checkout has no GitHub remote.' >&2
+  return 2
+}
+
+repository=$(detect_repository "${1:-}") || exit $?
+if [[ ! $repository =~ ^[^/[:space:]]+/[^/[:space:]]+$ ]]; then
+  echo 'Codex Cloud GitHub repository must use owner/repository format.' >&2
+  exit 2
+fi
 
 remote_url="${server_url%/}/${repository}.git"
 if git remote get-url origin >/dev/null 2>&1; then
@@ -94,12 +155,12 @@ mint_installation_token() {
       -H "Authorization: Bearer $jwt" \
       -H 'Accept: application/vnd.github+json' \
       -H 'X-GitHub-Api-Version: 2022-11-28' \
-      "${api_url}/app/installations?per_page=100" 2>/dev/null \
-      | jq -er --arg owner "$owner" '[.[] | select(.account.login == $owner) | .id][0]')
+      "${api_url}/repos/${owner}/${repo_name}/installation" \
+      | jq -er '.id')
   fi
 
   local request_body response
-  request_body=$(jq -cn --arg repo "$repo_name" '{repositories:[$repo],permissions:{actions:"write",contents:"write",issues:"write",pull_requests:"write"}}')
+  request_body=$(jq -cn --arg repo "$repo_name" '{repositories:[$repo],permissions:{actions:"write",contents:"write",issues:"write",pull_requests:"write",workflows:"write"}}')
   response=$(curl --fail --silent --show-error \
     -X POST \
     -H "Authorization: Bearer $jwt" \

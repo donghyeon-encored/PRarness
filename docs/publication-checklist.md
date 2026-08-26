@@ -34,9 +34,9 @@ procedure.
   active, assignable collaborators.
 - Confirm branch protection, Actions permissions, and CODEOWNERS coverage meet
   `docs/git-ground-rules.md`.
-- Install a repository-scoped GitHub App with contents, Issues, pull requests,
-  and Actions write permission, or create an equivalently scoped fine-grained
-  token for the Codex Cloud worker.
+- Install a repository-scoped GitHub App with Contents, Issues, Pull requests,
+  Actions, and Workflows write permission, or create an equivalently scoped
+  fine-grained token for the Codex Cloud worker.
 - Add `AGENT_APP_ID` as a repository variable.
 - Add `AGENT_APP_PRIVATE_KEY` as a repository secret. Never place its value in
   this checkout or expose it to the external relay.
@@ -50,11 +50,15 @@ procedure.
   either `CODEX_GITHUB_TOKEN` or `AGENT_APP_ID` plus
   `AGENT_APP_PRIVATE_KEY` (and optionally `AGENT_APP_INSTALLATION_ID`) as setup
   credentials. Never put their values in repository files.
-- Configure both the Cloud setup script and maintenance script to run
-  `bash .github/agent-pipeline/cloud-github-setup.sh OWNER/REPO`. It repairs the
-  `origin` remote, mints or loads the repository-scoped credential, persists it
-  in the container's private `gh` configuration, selects the default repo, and
-  verifies Git/API access without an interactive login.
+- Set `CODEX_GITHUB_REPOSITORY=OWNER/REPO` in the Cloud environment when its
+  checkout has no parseable GitHub remote. This is the only target-specific
+  bootstrap value; never hard-code a repository name in the setup script.
+- Configure both the Cloud setup script and maintenance script with the same
+  SHA-pinned, repository-independent installer from
+  `docs/codex-cloud-migration.md`. It installs
+  `$HOME/.local/bin/prarness-github-setup`, detects the target repository,
+  repairs `origin`, mints or loads the repository-scoped credential, selects
+  the default repo, and verifies Git/API access without an interactive login.
 - Run `npm ci --ignore-scripts`, `npm run lint`, and `npm test` on the exact
   source snapshot that will be published.
 - Confirm that the credential-isolated `Pull request validation` check runs on

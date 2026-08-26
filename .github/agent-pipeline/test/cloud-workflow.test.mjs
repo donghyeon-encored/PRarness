@@ -38,6 +38,7 @@ test("Cloud workers bootstrap GitHub and are encouraged to own scoped writes", a
   const policy = await readFile(new URL("../../../docs/git-ground-rules.md", import.meta.url), "utf8");
   const agents = await readFile(new URL("../../../AGENTS.md", import.meta.url), "utf8");
   const bridge = await readFile(new URL("../cloud-bridge.mjs", import.meta.url), "utf8");
+  const installer = await readFile(new URL("../cloud-environment-bootstrap.sh", import.meta.url), "utf8");
   const setup = await readFile(new URL("../cloud-github-setup.sh", import.meta.url), "utf8");
   const prompts = await Promise.all(["triage", "diagnose-plan", "implement", "review"].map((name) =>
     readFile(new URL(`../prompts/${name}.md`, import.meta.url), "utf8")));
@@ -46,8 +47,12 @@ test("Cloud workers bootstrap GitHub and are encouraged to own scoped writes", a
   assert.match(policy, /creates or repairs\s+the `origin` remote/);
   assert.match(agents, /Cloud workers are expected to manage the source Issue/);
   assert.doesNotMatch([policy, agents, bridge, ...prompts].join("\n"), /Only a deterministic publisher|Do not use gh|must not receive a GitHub write credential|deterministic publisher owns all GitHub writes/i);
-  assert.match(bridge, /cloud-github-setup\.sh/);
+  assert.match(bridge, /\.local\/bin\/prarness-github-setup --verify/);
+  assert.match(installer, /PRARNESS_BOOTSTRAP_REF/);
+  assert.match(installer, /40-character commit SHA/);
   assert.match(setup, /git remote add origin/);
+  assert.match(setup, /CODEX_GITHUB_REPOSITORY/);
+  assert.match(setup, /workflows:\"write\"/);
   assert.match(setup, /oauth_token/);
   assert.match(setup, /gh repo set-default/);
   assert.match(setup, /git ls-remote --exit-code origin HEAD/);

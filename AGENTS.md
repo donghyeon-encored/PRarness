@@ -11,10 +11,12 @@ the exact change and the protected-path policy passes.
 
 Codex Cloud workers are expected to manage the source Issue, canonical
 comments, `agent/issue-*` branch, commits, and draft pull request directly. Run
-`.github/agent-pipeline/cloud-github-setup.sh OWNER/REPO` first; use the
-configured `origin` and authenticated `gh` CLI instead of asking a person to log
-in. Keep writes scoped to the source Issue and its managed branch/PR, never
-force-push or merge, and never print or extract the configured credential.
+`$HOME/.local/bin/prarness-github-setup --verify OWNER/REPO` first; the Cloud
+environment installs and configures this repository-independent command before
+the agent phase. Use the configured `origin` and authenticated `gh` CLI instead
+of asking a person to log in. Keep writes scoped to the source Issue and its
+managed branch/PR, never force-push or merge, and never print or extract the
+configured credential.
 
 In an interactive Codex maintenance task, an explicit user request to maintain
 those files authorizes editing them. No separate GitHub Issue is required. The

@@ -55,16 +55,32 @@ https://learn.chatgpt.com/docs/cloud.
 2. Pin the reviewed bridge and `codex` executable to the versions recorded in
    the request. Launch the CLI from an empty, relay-owned control directory,
    never from an untrusted checkout.
-3. Create a repository-specific Cloud environment with fixed trusted setup and
-   maintenance scripts. Add `CODEX_GITHUB_TOKEN`, or add `AGENT_APP_ID` and
-   `AGENT_APP_PRIVATE_KEY` plus optional `AGENT_APP_INSTALLATION_ID`.
-   Configure both scripts to run
-   `bash .github/agent-pipeline/cloud-github-setup.sh OWNER/REPO` so every fresh
-   or resumed container repairs `origin`, refreshes authentication, and verifies
-   `gh` plus Git access before the agent phase.
-4. Add its non-secret ID as the repository variable `CODEX_CLOUD_ENV_ID` so
+3. Create a repository-specific Cloud environment. Add
+   `CODEX_GITHUB_TOKEN`, or add `AGENT_APP_ID` and
+   `AGENT_APP_PRIVATE_KEY` plus optional `AGENT_APP_INSTALLATION_ID`. If the
+   Cloud checkout has no GitHub remote, add the non-secret environment value
+   `CODEX_GITHUB_REPOSITORY=OWNER/REPO`.
+4. Configure both setup and maintenance scripts with this same generic loader,
+   replacing `REVIEWED_PRARNESS_COMMIT_SHA` with a reviewed 40-character
+   PRarness commit SHA:
+
+   ```bash
+   set -euo pipefail
+   prarness_ref=REVIEWED_PRARNESS_COMMIT_SHA
+   curl --fail --silent --show-error --location \
+     "https://raw.githubusercontent.com/donghyeon-encored/PRarness/${prarness_ref}/.github/agent-pipeline/cloud-environment-bootstrap.sh" \
+     | PRARNESS_BOOTSTRAP_REF="$prarness_ref" bash
+   ```
+
+   The loader installs `$HOME/.local/bin/prarness-github-setup`; it resolves the
+   target from an explicit argument, `CODEX_GITHUB_REPOSITORY`,
+   `GITHUB_REPOSITORY`, or exactly one parseable GitHub remote, in that order.
+   Every fresh or resumed container repairs `origin`, refreshes authentication,
+   and verifies `gh` plus Git access before the agent phase. Target repositories
+   do not need to copy `.github/agent-pipeline/**` from PRarness.
+5. Add its non-secret ID as the repository variable `CODEX_CLOUD_ENV_ID` so
    request construction is deterministic.
-5. Keep raw requests, task URLs, task status, downloaded diff hashes, and
+6. Keep raw requests, task URLs, task status, downloaded diff hashes, and
    validated results in a relay-local append-only ledger.
 
 Ownership routing and execution are deliberately separate. A person's
