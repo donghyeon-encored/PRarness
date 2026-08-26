@@ -22,6 +22,11 @@ pipeline:
     backend: codex_cloud
     authentication: existing_chatgpt_session
     api_billing_fallback: false
+    github:
+      checkout_remote: origin
+      configure_remote: true
+      cli_authentication: cloud_environment_bootstrap
+      model_writes: encouraged
 
   unknown_risk_is_high: true
 

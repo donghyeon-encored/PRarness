@@ -287,6 +287,11 @@ export function loadTeam(teamPath = ".github/agent-pipeline/team.yaml") {
   invariant(isObject(execution) && execution.backend === "codex_cloud", "pipeline.execution.backend must be codex_cloud", "INVALID_TEAM_POLICY");
   invariant(execution.authentication === "existing_chatgpt_session", "Codex Cloud must use the existing ChatGPT session", "INVALID_TEAM_POLICY");
   invariant(execution.api_billing_fallback === false, "API billing fallback must be disabled", "INVALID_TEAM_POLICY");
+  invariant(isObject(execution.github), "pipeline.execution.github must be configured", "INVALID_TEAM_POLICY");
+  invariant(execution.github.checkout_remote === "origin", "Codex Cloud checkout remote must be origin", "INVALID_TEAM_POLICY");
+  invariant(execution.github.configure_remote === true, "Codex Cloud must configure its GitHub remote", "INVALID_TEAM_POLICY");
+  invariant(execution.github.cli_authentication === "cloud_environment_bootstrap", "gh must be authenticated by the Cloud environment bootstrap", "INVALID_TEAM_POLICY");
+  invariant(execution.github.model_writes === "encouraged", "Codex Cloud model GitHub writes must be encouraged", "INVALID_TEAM_POLICY");
   const maintenancePrefix = String(team.pipeline.maintenance?.branch_prefix ?? "");
   invariant(maintenancePrefix.startsWith("codex/maintenance-") && !maintenancePrefix.includes(".."), "Invalid interactive maintenance branch prefix", "INVALID_TEAM_POLICY");
   const riskPolicy = team.pipeline.risk_policy;

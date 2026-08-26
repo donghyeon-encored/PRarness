@@ -55,6 +55,12 @@ const team = {
       backend: "codex_cloud",
       authentication: "existing_chatgpt_session",
       api_billing_fallback: false,
+      github: {
+        checkout_remote: "origin",
+        configure_remote: true,
+        cli_authentication: "cloud_environment_bootstrap",
+        model_writes: "encouraged",
+      },
     },
     unknown_risk_is_high: true,
     change_scope: {
@@ -1469,6 +1475,9 @@ test("Cloud policy projection contains routing and review policy but no runtime 
   assert.equal(projection.pipeline.bootstrap_agent, "codex");
   assert.equal(projection.pipeline.execution.backend, "codex_cloud");
   assert.equal(projection.pipeline.execution.api_billing_fallback, false);
+  assert.equal(projection.pipeline.execution.github.checkout_remote, "origin");
+  assert.equal(projection.pipeline.execution.github.cli_authentication, "cloud_environment_bootstrap");
+  assert.equal(projection.pipeline.execution.github.model_writes, "encouraged");
   assert.deepEqual(projection.pipeline.validation_commands, ["npm run lint", "npm test"]);
   assert.deepEqual(projection.people.map((person) => person.github), ["platform-maintainer", "frontend-owner", "inactive-owner"]);
   assert.equal(projection.people.at(-1).active, false);
@@ -1482,6 +1491,8 @@ test("repository team.yaml protects its own governing policy documents", () => {
   const repoTeam = loadTeam(fileURLToPath(new URL("../team.yaml", import.meta.url)));
   assert.equal(repoTeam.pipeline.execution.backend, "codex_cloud");
   assert.equal(repoTeam.pipeline.execution.api_billing_fallback, false);
+  assert.equal(repoTeam.pipeline.execution.github.configure_remote, true);
+  assert.equal(repoTeam.pipeline.execution.github.model_writes, "encouraged");
   assert.equal(repoTeam.people.find((person) => person.github === "frontend-owner").main_agent, "claude");
   const governanceReviewer = repoTeam.people.find((person) => person.github === "donghyeon-encored");
   assert.equal(governanceReviewer.review.can_review, true);

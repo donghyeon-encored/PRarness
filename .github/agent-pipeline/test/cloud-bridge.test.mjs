@@ -33,11 +33,27 @@ const request = (overrides = {}) => ({
   ...overrides,
 });
 
-test("validates a SHA-bound single-attempt request and renders a no-write query", () => {
+test("validates a SHA-bound request and renders Cloud GitHub bootstrap/direct-write guidance", () => {
   assert.equal(validateCloudRequest(request()).stage, "triage");
   const query = buildCloudQuery(request());
-  assert.match(query, /Never commit, push, open\/update a PR/);
+  assert.match(query, /cloud-github-setup\.sh owner\/repo/);
+  assert.match(query, /Direct GitHub work is an intended part/);
+  assert.match(query, /create or update the source Issue's canonical triage/);
+  assert.doesNotMatch(query, /Do not use gh|Never commit, push/);
   assert.match(query, new RegExp("a{40}"));
+});
+
+test("implementation workers are told to own their branch, commit, draft PR, and comments", () => {
+  const implementation = request({
+    request_id: "issue-1-implement-a1b2c3d4",
+    stage: "implement",
+    result_path: ".agent-cloud-output/issue-1-implement-a1b2c3d4/implement.json",
+    allowed_paths: ["src/fix.mjs"],
+  });
+  const query = buildCloudQuery(implementation);
+  assert.match(query, /create or reuse the managed agent\/issue-\* branch/);
+  assert.match(query, /create or update its draft PR/);
+  assert.match(query, /Never force-push, merge or approve your own PR/);
 });
 
 test("rejects unsafe request state and secret-like context keys", () => {

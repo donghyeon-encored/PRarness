@@ -14,7 +14,7 @@
 | 임의 사용자의 canonical state marker 위조 가능성 | 상태 탈취·게시 중단 | GitHub App ID 또는 지정 bot identity가 작성한 최신 marker만 신뢰 | 위조 comment 회귀 테스트 |
 | 외부 review/comment가 쓰기 루프를 재개할 가능성 | 무권한 변경 게시 | event gate에서 association, bot, fork, branch를 fail-closed 검사 | 합성 event gate 테스트 |
 | Protected 경로의 Issue 범위 승인만으로 All OK 가능 | 검토하지 않은 민감 변경의 Draft 해제 | 범위 승인과 실제 PR head 콘텐츠 승인을 분리하고, 선택 reviewer의 exact-SHA 승인까지 요구 | scope-only 거부 및 exact-head 통과 테스트 |
-| 게시 검증 후 PR/default branch가 바뀔 수 있음 | 검증한 대상과 게시 대상 불일치 | App write token 발급 직전과 publisher 내부에서 live repository/PR/ref/SHA/lifecycle 재검증 | closed PR·stale head 회귀 테스트 |
+| 게시 검증 후 PR/default branch가 바뀔 수 있음 | 검증한 대상과 게시 대상 불일치 | Codex Cloud agent가 push 직전에 live repository/PR/ref/SHA/lifecycle를 다시 조회하고 불일치 시 중단 | closed PR·stale head 회귀 테스트 |
 | 닫힌 PR 뒤 동일 branch의 새 PR 생성 가능 | issue당 PR 하나 불변식 파괴 | canonical PR이 closed/merged이면 재생성하지 않고 HUMAN_REQUIRED/fail-closed | lifecycle 테스트 |
 | 결정론적 high risk가 다음 fix iteration에서 low로 하향 | 부적격 reviewer 선택 | prior high를 sticky하게 유지하고 triage domain/privacy 근거를 `risk_context`로 전달 | high-risk downgrade 회귀 테스트 |
 | dispatch/resume의 API 보강 event가 후속 agent에 전달되지 않음 | 빈 Issue 내용, PR author 제외 우회 | gate가 enriched event를 canonical `event.json`으로 원자적으로 출력 | workflow contract 및 CLI 출력 검사 |
@@ -43,13 +43,13 @@
 GitHub는 workflow YAML을 job 내부 gate보다 먼저 해석한다. 따라서 같은
 저장소의 신뢰되지 않은 사용자가 workflow 파일을 바꾼 PR을 실행하고
 repository secret에 접근할 수 있는 권한 모델이라면, 단일 workflow 내부
-검사만으로 그 실행 정의 자체를 보호할 수 없다. 이 저장소는 agent가
-`.github/workflows/**`를 수정하는 경로를 무조건 차단하지만, 운영 저장소에서도
-다음을 별도로 강제해야 한다.
+검사만으로 그 실행 정의 자체를 보호할 수 없다. 이 저장소는 자동 Issue
+모드에서 `.github/workflows/**` 수정을 차단하고 대화형 유지보수에서만 명시적
+요청으로 허용한다. 운영 저장소에서도 다음을 별도로 강제해야 한다.
 
 - workflow 변경에 CODEOWNERS 승인과 보호 branch review 요구
 - Actions 실행 권한을 신뢰된 collaborator로 제한
 - 신뢰되지 않은 same-repository branch를 허용해야 한다면 secret 없는 collector와
-  default-branch 전용 publisher workflow로 권한 분리
+  신뢰된 default-branch controller를 분리
 
 이 운영 의존성이 충족되지 않은 환경에서는 App private key를 활성화하지 않는다.

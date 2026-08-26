@@ -34,24 +34,30 @@ procedure.
   active, assignable collaborators.
 - Confirm branch protection, Actions permissions, and CODEOWNERS coverage meet
   `docs/git-ground-rules.md`.
-- Install a repository-scoped GitHub App with only the permissions required by
-  the deterministic publisher, including Actions write permission so a
-  successful publication can dispatch the next trusted default-branch review
-  cycle.
+- Install a repository-scoped GitHub App with contents, Issues, pull requests,
+  and Actions write permission, or create an equivalently scoped fine-grained
+  token for the Codex Cloud worker.
 - Add `AGENT_APP_ID` as a repository variable.
 - Add `AGENT_APP_PRIVATE_KEY` as a repository secret. Never place its value in
-  this checkout or expose it to a Cloud relay job.
+  this checkout or expose it to the external relay.
 - Keep the ChatGPT-authenticated host outside GitHub Actions. For a public
   repository, do not register that account as a self-hosted runner or copy
   `auth.json` into Actions.
 - Configure the pinned CLI path only in the external relay's local service
   configuration; never expose that service account to repository jobs.
-- Create a secret-free, repository-specific Codex Cloud environment and add its
-  ID as the `CODEX_CLOUD_ENV_ID` repository variable. Disable agent internet and
-  keep GitHub credentials out of setup and maintenance scripts.
+- Create a repository-specific Codex Cloud environment and add its ID as the
+  `CODEX_CLOUD_ENV_ID` repository variable. In that Cloud environment, add
+  either `CODEX_GITHUB_TOKEN` or `AGENT_APP_ID` plus
+  `AGENT_APP_PRIVATE_KEY` (and optionally `AGENT_APP_INSTALLATION_ID`) as setup
+  credentials. Never put their values in repository files.
+- Configure both the Cloud setup script and maintenance script to run
+  `bash .github/agent-pipeline/cloud-github-setup.sh OWNER/REPO`. It repairs the
+  `origin` remote, mints or loads the repository-scoped credential, persists it
+  in the container's private `gh` configuration, selects the default repo, and
+  verifies Git/API access without an interactive login.
 - Run `npm ci --ignore-scripts`, `npm run lint`, and `npm test` on the exact
   source snapshot that will be published.
-- Confirm that the secret-free `Pull request validation` check runs on
+- Confirm that the credential-isolated `Pull request validation` check runs on
   `codex/maintenance-*` and `agent/issue-*` pull requests. A green gate-only
   no-op is not sufficient validation.
 

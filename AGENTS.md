@@ -9,6 +9,13 @@ Automated Issue-driven runs must not modify protected pipeline, workflow,
 ownership, or secret-related files unless the source Issue explicitly requests
 the exact change and the protected-path policy passes.
 
+Codex Cloud workers are expected to manage the source Issue, canonical
+comments, `agent/issue-*` branch, commits, and draft pull request directly. Run
+`.github/agent-pipeline/cloud-github-setup.sh OWNER/REPO` first; use the
+configured `origin` and authenticated `gh` CLI instead of asking a person to log
+in. Keep writes scoped to the source Issue and its managed branch/PR, never
+force-push or merge, and never print or extract the configured credential.
+
 In an interactive Codex maintenance task, an explicit user request to maintain
 those files authorizes editing them. No separate GitHub Issue is required. The
 default publication path is a `codex/maintenance-*` branch and draft pull

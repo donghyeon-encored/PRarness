@@ -5,15 +5,16 @@ The public-repository boundary is intentionally staged:
 ```text
 GitHub-hosted gate → SHA-bound Cloud request → audit artifact → fail closed
                                            ↘ trusted local relay → Codex Cloud
-                                             (return channel not connected)
+                                             ↘ authenticated git/gh → GitHub
+                                             (result return channel not connected)
 ```
 
 Triage, plan, review, and implementation requests preserve the existing stage
 schemas, policy projection, source/subject SHAs, request nonce, one-attempt
 limit, and pinned CLI version. The public workflow never runs a
 ChatGPT-authenticated process. Until a separately reviewed result mailbox is
-available, it archives the request and stops before verification, App-token
-minting, or any publisher job.
+available, it archives the request and stops before importing the Cloud result
+into the next controller stage.
 
 ## Authentication boundary
 
@@ -28,13 +29,18 @@ reach its cached login even when the `codex` subprocess receives a sanitized
 environment. The bridge therefore rejects Cloud CLI calls when
 `GITHUB_ACTIONS` or `ACTIONS_RUNTIME_TOKEN` is present.
 
-For automated Issue mode, the repository-scoped GitHub App remains the only
-repository writer. Cloud and the external relay receive no App private key,
-GitHub token, PAT, or repository write capability. Interactive maintenance is a
-separate user-authorized path. It uses a `codex/maintenance-*` draft PR by
-default, but an explicit instruction to publish to the default branch permits
-one validated fast-forward commit after the live head is rechecked. It never
-force-pushes or self-merges a pull request.
+The external relay receives no GitHub credential. The Codex Cloud environment
+does: its setup/maintenance bootstrap uses either `CODEX_GITHUB_TOKEN` or the
+repository GitHub App credentials to configure `origin` and persist
+non-interactive `gh` access inside the task container. The Cloud model is
+expected to use that scoped access for the source Issue, canonical comments,
+managed branch, commits, draft PR, and review comments. It must not print or
+extract the credential, force-push, self-approve, or merge.
+
+Interactive maintenance is a separate user-authorized path. It uses a
+`codex/maintenance-*` draft PR by default, but an explicit instruction to
+publish to the default branch permits one validated fast-forward commit after
+the live head is rechecked.
 
 OpenAI's documented Codex Cloud setup requires a ChatGPT sign-in, a connected
 GitHub repository, and a configured Cloud environment. This relay never opens
@@ -49,8 +55,13 @@ https://learn.chatgpt.com/docs/cloud.
 2. Pin the reviewed bridge and `codex` executable to the versions recorded in
    the request. Launch the CLI from an empty, relay-owned control directory,
    never from an untrusted checkout.
-3. Create a repository-specific Cloud environment with no secrets, no GitHub
-   credentials, agent internet disabled, and fixed trusted setup/maintenance.
+3. Create a repository-specific Cloud environment with fixed trusted setup and
+   maintenance scripts. Add `CODEX_GITHUB_TOKEN`, or add `AGENT_APP_ID` and
+   `AGENT_APP_PRIVATE_KEY` plus optional `AGENT_APP_INSTALLATION_ID`.
+   Configure both scripts to run
+   `bash .github/agent-pipeline/cloud-github-setup.sh OWNER/REPO` so every fresh
+   or resumed container repairs `origin`, refreshes authentication, and verifies
+   `gh` plus Git access before the agent phase.
 4. Add its non-secret ID as the repository variable `CODEX_CLOUD_ENV_ID` so
    request construction is deterministic.
 5. Keep raw requests, task URLs, task status, downloaded diff hashes, and
@@ -99,7 +110,8 @@ and deterministic App-token isolation. A private control repository is the
 preferred next phase; an unsigned comment, public self-hosted runner, or raw
 `repository_dispatch` payload is not an acceptable shortcut.
 
-After that transport exists, the validated implementation patch must still
-pass the original fresh-runner line budget, risk, protected-path, validation,
-exact-SHA review, and deterministic App publisher checks. The pipeline never
-auto-merges.
+After that transport exists, the controller must reconcile the Cloud worker's
+reported branch/PR/SHA with live GitHub state before dispatching the next stage.
+The Cloud worker still applies the line budget, risk, protected-path,
+validation, and exact-SHA review checks before its direct GitHub updates. The
+pipeline never auto-merges.
