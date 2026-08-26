@@ -1,0 +1,55 @@
+name: Pull request validation
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-validation-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  validate:
+    name: Secret-free repository validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the exact pull-request head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: .github/agent-pipeline/package-lock.json
+
+      - name: Install deterministic pipeline dependencies
+        run: npm ci --ignore-scripts --prefix .github/agent-pipeline
+
+      - name: Validate policy, source, and tests
+        run: |
+          node .github/agent-pipeline/pipeline.mjs validate-team --team .github/agent-pipeline/team.yaml
+          npm run lint --prefix .github/agent-pipeline
+          npm test --prefix .github/agent-pipeline
+
+      - name: Parse every workflow as YAML
+        run: |
+          ruby -e 'require "yaml"; Dir[".github/workflows/*.{yml,yaml}"].sort.each { |path| YAML.parse_file(path) or abort("invalid YAML: #{path}") }'
+
+      - name: Enforce the pull-request trust boundary
+        run: |
+          forbidden_event='pull_request''_target'
+          forbidden_secret='AGENT_APP_PRIVATE''_KEY|OPENAI_API''_KEY|ANTHROPIC_API''_KEY'
+          test -z "$(find .github/workflows -maxdepth 1 -type f -name '*.yml' -print0 | xargs -0 grep -l "$forbidden_event" || true)"
+          test -z "$(grep -E "$forbidden_secret" .github/workflows/pr-validation.yml || true)"

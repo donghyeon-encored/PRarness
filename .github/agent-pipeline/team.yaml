@@ -15,6 +15,14 @@ pipeline:
     max_pr_changed_lines: 400
 
   branch_prefix: agent/issue-
+  maintenance:
+    branch_prefix: codex/maintenance-
+
+  execution:
+    backend: codex_cloud
+    authentication: existing_chatgpt_session
+    api_billing_fallback: false
+
   unknown_risk_is_high: true
 
   risk_policy:
@@ -78,7 +86,8 @@ pipeline:
     - ".github/agent-pipeline/**"
     - "CODEOWNERS"
     - "docs/git-ground-rules.md"
-    - "AGENTS.md"
+    - "**/AGENTS.md"
+    - "**/AGENTS.override.md"
     - "CLAUDE.md"
     - "**/*.pem"
     - "**/.env*"
@@ -145,3 +154,35 @@ people:
       high_risk_domains:
         - accessibility
       high_risk_paths: []
+
+  - github: donghyeon-encored
+    active: true
+    main_agent: codex
+
+    responsibilities:
+      domains:
+        - repository-governance
+      labels:
+        - area/agent-pipeline
+      keywords:
+        - workflow
+        - pipeline
+        - codex cloud
+      paths:
+        - ".github/workflows/**"
+        - ".github/agent-pipeline/**"
+        - "docs/git-ground-rules.md"
+        - "AGENTS.md"
+
+    review:
+      can_review: true
+      high_risk_domains:
+        - permissions
+        - secrets
+        - repository-governance
+      high_risk_paths:
+        - ".github/workflows/**"
+        - ".github/agent-pipeline/**"
+        - "docs/git-ground-rules.md"
+        - "**/AGENTS.md"
+        - "**/AGENTS.override.md"

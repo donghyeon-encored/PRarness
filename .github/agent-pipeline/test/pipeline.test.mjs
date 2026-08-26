@@ -12,6 +12,7 @@ import {
   authorizeProtectedPaths,
   branchName,
   buildCodegraph,
+  cloudPolicyProjection,
   checkProtectedPaths,
   createPatch,
   evaluateAllOk,
@@ -49,6 +50,12 @@ const team = {
     max_pr_assignees: 3,
     max_auto_iterations: 5,
     branch_prefix: "agent/issue-",
+    maintenance: { branch_prefix: "codex/maintenance-" },
+    execution: {
+      backend: "codex_cloud",
+      authentication: "existing_chatgpt_session",
+      api_billing_fallback: false,
+    },
     unknown_risk_is_high: true,
     change_scope: {
       commit_unit: "single_crud_bundle",
@@ -231,6 +238,27 @@ test("event gate requires approval for external intake and ignores bot comments"
   assert.equal(external.allowed, false);
   assert.equal(external.approval_required, true);
   assert.equal(external.action, "approval-required");
+
+  const approved = gateEvent(
+    {
+      action: "created",
+      issue: { number: 7, title: "Bug", author_association: "CONTRIBUTOR" },
+      comment: { body: "/agent approve-intake", author_association: "OWNER", user: { login: "maintainer", type: "User" } },
+    },
+    "issue_comment",
+    team,
+  );
+  assert.equal(approved.allowed, true);
+  assert.equal(approved.phase, "triage");
+  assert.equal(approved.reason, "maintainer_approved_intake");
+
+  const labeled = gateEvent(
+    { action: "labeled", issue: { number: 7 }, label: { name: "agent:approved" } },
+    "issues",
+    team,
+  );
+  assert.equal(labeled.allowed, false);
+  assert.equal(labeled.reason, "unsupported_issue_action");
 
   const botComment = gateEvent(
     {
@@ -1414,10 +1442,55 @@ test("CLI writes normalized JSON to --output", () => {
   assert.equal(JSON.parse(readFileSync(output, "utf8")).verdict, "pass");
 });
 
+test("controller builds a stage and SHA-bound Cloud request", () => {
+  const directory = mkdtempSync(join(tmpdir(), "pipeline-cloud-request-"));
+  const prompt = join(directory, "prompt.md");
+  const schema = join(directory, "schema.json");
+  const context = join(directory, "context.json");
+  const output = join(directory, "request.json");
+  writeFileSync(prompt, "Return the triage payload.");
+  writeFileSync(schema, JSON.stringify({ type: "object" }));
+  writeFileSync(context, JSON.stringify({ issue: { number: 1 }, state: {} }));
+  execFileSync(process.execPath, [pipelinePath, "build-cloud-request", "--stage", "triage",
+    "--team", fileURLToPath(new URL("../team.yaml", import.meta.url)),
+    "--request-id", "gh-12345678-triage", "--repository", "owner/repo", "--environment", "env_12345678",
+    "--cli-version", "0.145.0", "--source-sha", "a".repeat(40), "--subject-sha", "a".repeat(40),
+    "--prompt", prompt, "--schema", schema, "--context", context, "--output", output]);
+  const request = JSON.parse(readFileSync(output, "utf8"));
+  assert.equal(request.result_path, ".agent-cloud-output/gh-12345678-triage/triage.json");
+  assert.deepEqual(Object.keys(request.context).sort(), ["issue", "state"]);
+  assert.match(request.instructions, /Trusted deterministic policy projection/);
+  assert.match(request.instructions, /npm run lint/);
+  assert.match(request.instructions, /platform-maintainer/);
+});
+
+test("Cloud policy projection contains routing and review policy but no runtime credentials", () => {
+  const projection = cloudPolicyProjection(team);
+  assert.equal(projection.pipeline.bootstrap_agent, "codex");
+  assert.equal(projection.pipeline.execution.backend, "codex_cloud");
+  assert.equal(projection.pipeline.execution.api_billing_fallback, false);
+  assert.deepEqual(projection.pipeline.validation_commands, ["npm run lint", "npm test"]);
+  assert.deepEqual(projection.people.map((person) => person.github), ["platform-maintainer", "frontend-owner", "inactive-owner"]);
+  assert.equal(projection.people.at(-1).active, false);
+  const collectKeys = (value) => value && typeof value === "object"
+    ? Object.entries(value).flatMap(([key, child]) => [key, ...collectKeys(child)])
+    : [];
+  assert.doesNotMatch(collectKeys(projection).join("\n"), /token|private.?key|credential/i);
+});
+
 test("repository team.yaml protects its own governing policy documents", () => {
   const repoTeam = loadTeam(fileURLToPath(new URL("../team.yaml", import.meta.url)));
-  const result = checkProtectedPaths(repoTeam, ["docs/git-ground-rules.md", "AGENTS.md", "CLAUDE.md"], false);
-  assert.deepEqual(result.matched.sort(), ["AGENTS.md", "CLAUDE.md", "docs/git-ground-rules.md"]);
+  assert.equal(repoTeam.pipeline.execution.backend, "codex_cloud");
+  assert.equal(repoTeam.pipeline.execution.api_billing_fallback, false);
+  assert.equal(repoTeam.people.find((person) => person.github === "frontend-owner").main_agent, "claude");
+  const governanceReviewer = repoTeam.people.find((person) => person.github === "donghyeon-encored");
+  assert.equal(governanceReviewer.review.can_review, true);
+  assert.deepEqual(
+    checkProtectedPaths({ pipeline: { protected_paths: governanceReviewer.review.high_risk_paths } }, [".github/workflows/issue-review.yml", ".github/agent-pipeline/pipeline.mjs"], false).matched.sort(),
+    [".github/agent-pipeline/pipeline.mjs", ".github/workflows/issue-review.yml"],
+  );
+  const result = checkProtectedPaths(repoTeam, ["docs/git-ground-rules.md", "AGENTS.md", "nested/AGENTS.md", "nested/AGENTS.override.md", "CLAUDE.md"], false);
+  assert.deepEqual(result.matched.sort(), ["AGENTS.md", "CLAUDE.md", "docs/git-ground-rules.md", "nested/AGENTS.md", "nested/AGENTS.override.md"]);
   // Every configured issue/PR assignee cap must actually flow through selectOwner/selectPrTeam.
   assert.equal(asIntegerFromTeam(repoTeam, "max_issue_assignees"), selectOwner(repoTeam, { title: "", body: "" }).max_assignees);
 });

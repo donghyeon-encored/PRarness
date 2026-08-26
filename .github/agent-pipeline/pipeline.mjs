@@ -13,6 +13,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { basename, dirname, extname, join, normalize, posix, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { validateCloudRequest } from "./cloud-bridge.mjs";
 
 const PIPELINE_VERSION = 1;
 const STATE_MARKER = "issue-review-state:v1";
@@ -282,6 +283,12 @@ export function loadTeam(teamPath = ".github/agent-pipeline/team.yaml") {
   const target = asInteger(changeScope.target_pr_changed_lines, 0);
   const maximum = asInteger(changeScope.max_pr_changed_lines, 0);
   invariant(target > 0 && maximum >= target, "change_scope line limits must be positive and ordered", "INVALID_TEAM_POLICY");
+  const execution = team.pipeline.execution;
+  invariant(isObject(execution) && execution.backend === "codex_cloud", "pipeline.execution.backend must be codex_cloud", "INVALID_TEAM_POLICY");
+  invariant(execution.authentication === "existing_chatgpt_session", "Codex Cloud must use the existing ChatGPT session", "INVALID_TEAM_POLICY");
+  invariant(execution.api_billing_fallback === false, "API billing fallback must be disabled", "INVALID_TEAM_POLICY");
+  const maintenancePrefix = String(team.pipeline.maintenance?.branch_prefix ?? "");
+  invariant(maintenancePrefix.startsWith("codex/maintenance-") && !maintenancePrefix.includes(".."), "Invalid interactive maintenance branch prefix", "INVALID_TEAM_POLICY");
   const riskPolicy = team.pipeline.risk_policy;
   invariant(isObject(riskPolicy) && riskPolicy.equivalent_severity_is_high === true, "risk_policy must fail high for equivalent severity", "INVALID_TEAM_POLICY");
   invariant(Array.isArray(riskPolicy.categories), "risk_policy must define categories[]", "INVALID_TEAM_POLICY");
@@ -299,6 +306,31 @@ export function loadTeam(teamPath = ".github/agent-pipeline/team.yaml") {
     logins.add(lower(person.github));
   }
   return team;
+}
+
+export function cloudPolicyProjection(team) {
+  const pipeline = team.pipeline;
+  return {
+    version: team.version,
+    pipeline: {
+      bootstrap_agent: pipeline.bootstrap_agent,
+      execution: pipeline.execution,
+      fallback_assignee: pipeline.fallback_assignee,
+      max_auto_iterations: pipeline.max_auto_iterations,
+      unknown_risk_is_high: pipeline.unknown_risk_is_high,
+      change_scope: pipeline.change_scope,
+      protected_paths: asArray(pipeline.protected_paths).map(String),
+      validation_commands: asArray(pipeline.validation_commands).map(String),
+      risk_policy: pipeline.risk_policy,
+    },
+    people: team.people.map((person) => ({
+      github: person.github,
+      active: person.active,
+      main_agent: person.main_agent,
+      responsibilities: person.responsibilities ?? {},
+      review: person.review ?? {},
+    })),
+  };
 }
 
 function globSegment(segment) {
@@ -570,13 +602,8 @@ export function gateEvent(event, eventName, team, options = {}) {
   if (name !== "pull_request" && actorIsBot(event)) return deny("bot_event_ignored");
 
   if (name === "issues") {
-    if (action === "labeled") {
-      const label = lower(event?.label?.name);
-      if (label !== "agent:approved") return deny("unrelated_issue_label");
-      return allow("triage", "maintainer_approved");
-    }
     if (action !== "opened") return deny("unsupported_issue_action");
-    if (WRITE_ASSOCIATIONS.has(association) || eventLabels(issue).includes("agent:approved")) return allow("intake");
+    if (WRITE_ASSOCIATIONS.has(association)) return allow("intake");
     return deny("external_author_requires_approval", { approval_required: true, action: "approval-required", phase: "human_approval" });
   }
 
@@ -603,8 +630,16 @@ export function gateEvent(event, eventName, team, options = {}) {
     const commentBody = String(event?.comment?.body ?? "");
     const protectedApproval = parseProtectedApprovalCommand(commentBody);
     const resume = /^\s*\/agent\s+resume\s*$/i.test(commentBody);
-    if (!resume && !protectedApproval.present) return deny("not_resume_or_protected_approval_command");
-    if (!WRITE_ASSOCIATIONS.has(association)) return deny(resume ? "resume_requires_write_access" : "protected_approval_requires_write_access");
+    const intakeApproval = /^\s*\/agent\s+approve-intake\s*$/i.test(commentBody);
+    if (!resume && !intakeApproval && !protectedApproval.present) return deny("not_agent_control_command");
+    if (!WRITE_ASSOCIATIONS.has(association)) {
+      const reason = resume ? "resume_requires_write_access" : intakeApproval ? "intake_approval_requires_write_access" : "protected_approval_requires_write_access";
+      return deny(reason);
+    }
+    if (intakeApproval) {
+      if (issue?.pull_request || pr) return deny("intake_approval_must_be_on_source_issue");
+      return allow("triage", "maintainer_approved_intake");
+    }
     if (protectedApproval.present) {
       if (!protectedApproval.valid) return deny(protectedApproval.reason);
       if (issue?.pull_request) return deny("protected_approval_must_be_on_source_issue");
@@ -698,7 +733,12 @@ export function routeAgent(team, assignee) {
   const person = team.people.find((candidate) => lower(candidate.github) === lower(assignee) && candidate.active !== false);
   const agent = person?.main_agent ?? team.pipeline?.bootstrap_agent;
   invariant(agent, "No bootstrap agent is configured", "NO_AGENT");
-  return { assignee: person?.github ?? assignee ?? null, agent, source: person?.main_agent ? "assignee" : "bootstrap" };
+  return {
+    assignee: person?.github ?? assignee ?? null,
+    agent,
+    execution_backend: team.pipeline?.execution?.backend ?? null,
+    source: person?.main_agent ? "assignee" : "bootstrap",
+  };
 }
 
 function domainMatchesPerson(person, domains) {
@@ -2328,7 +2368,7 @@ async function publishApprovalRequired(client, input) {
     client,
     issue,
     state,
-    input.body ?? "외부 기여자의 Issue이므로 write-capable agent 실행 전에 maintainer의 `agent:approved` 승인이 필요합니다.",
+    input.body ?? "외부 기여자의 Issue이므로 write-capable agent 실행 전에 write 권한이 있는 maintainer가 정확히 `/agent approve-intake`라고 댓글을 남겨야 합니다.",
   );
   return { operation: "approval-required", issue, labels: ["agent:approval-required"], comment };
 }
@@ -3166,6 +3206,10 @@ Usage: node pipeline.mjs <command> [options]
 Read-only policy/data commands (JSON stdout; all accept --output FILE):
   validate-team       --team FILE
   validation-commands --team FILE
+  build-cloud-request --stage NAME --request-id ID --repository OWNER/REPO
+                      --environment ID --cli-version VERSION --source-sha SHA
+                      --subject-sha SHA --prompt FILE --schema FILE --context FILE
+                      [--allowed-paths FILE]
   gate-event          --event FILE [--event-name NAME] [--team FILE]
                       [--enriched-output FILE]
   route-agent         --team FILE [--assignee LOGIN | --triage FILE]
@@ -3219,6 +3263,29 @@ export async function runCli(argv = process.argv.slice(2)) {
     return emit(asArray(team.pipeline?.validation_commands).map(String), args, {
       githubValue: { commands_json: asArray(team.pipeline?.validation_commands).map(String) },
     });
+  }
+  if (command === "build-cloud-request") {
+    const stage = requiredArg(args, "stage");
+    const requestId = requiredArg(args, "request_id");
+    const prompt = rawInput(requiredArg(args, "prompt"), "--prompt");
+    const policy = cloudPolicyProjection(loadTeam(teamPath));
+    const request = {
+      version: 1,
+      request_id: requestId,
+      stage,
+      source_sha: requiredArg(args, "source_sha"),
+      subject_sha: requiredArg(args, "subject_sha"),
+      repository: requiredArg(args, "repository"),
+      environment_id: requiredArg(args, "environment"),
+      attempts: 1,
+      expected_cli_version: requiredArg(args, "cli_version"),
+      result_path: `.agent-cloud-output/${requestId}/${stage}.json`,
+      allowed_paths: args.allowed_paths ? readPaths(args.allowed_paths) : [],
+      instructions: `${prompt}\n\n## Trusted deterministic policy projection\n\n${JSON.stringify(policy)}`,
+      context: readJsonish(requiredArg(args, "context"), "--context"),
+      payload_schema: readJsonish(requiredArg(args, "schema"), "--schema"),
+    };
+    return emit(validateCloudRequest(request), args);
   }
   if (command === "gate-event" || command === "gate") {
     const team = loadTeam(teamPath);

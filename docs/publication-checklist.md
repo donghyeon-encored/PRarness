@@ -35,12 +35,31 @@ procedure.
 - Confirm branch protection, Actions permissions, and CODEOWNERS coverage meet
   `docs/git-ground-rules.md`.
 - Install a repository-scoped GitHub App with only the permissions required by
-  the deterministic publisher.
+  the deterministic publisher, including Actions write permission so a
+  successful publication can dispatch the next trusted default-branch review
+  cycle.
 - Add `AGENT_APP_ID` as a repository variable.
-- Add `AGENT_APP_PRIVATE_KEY` and the selected provider API keys as repository
-  secrets through GitHub settings. Never place their values in this checkout.
+- Add `AGENT_APP_PRIVATE_KEY` as a repository secret. Never place its value in
+  this checkout or expose it to a Cloud relay job.
+- Keep the ChatGPT-authenticated host outside GitHub Actions. For a public
+  repository, do not register that account as a self-hosted runner or copy
+  `auth.json` into Actions.
+- Configure the pinned CLI path only in the external relay's local service
+  configuration; never expose that service account to repository jobs.
+- Create a secret-free, repository-specific Codex Cloud environment and add its
+  ID as the `CODEX_CLOUD_ENV_ID` repository variable. Disable agent internet and
+  keep GitHub credentials out of setup and maintenance scripts.
 - Run `npm ci --ignore-scripts`, `npm run lint`, and `npm test` on the exact
   source snapshot that will be published.
+- Confirm that the secret-free `Pull request validation` check runs on
+  `codex/maintenance-*` and `agent/issue-*` pull requests. A green gate-only
+  no-op is not sufficient validation.
 
-Protected workflow, pipeline, ownership, and policy changes must follow the
-approval process in `docs/git-ground-rules.md`.
+Automated Issue work that touches protected workflow, pipeline, ownership, or
+policy files must follow the Issue approval process in
+`docs/git-ground-rules.md`. For interactive maintenance, the user's direct
+request authorizes publication without a synthetic Issue. Use a
+`codex/maintenance-*` draft PR by default; when the user explicitly requests the
+default branch, re-fetch its live SHA and publish one validated fast-forward
+commit. The final PR head still requires human review before merge when the PR
+path is used. Never force-push either path.

@@ -23,11 +23,13 @@ npm test
 
 ```text
 .github/agent-pipeline/pipeline.mjs  deterministic controller and publisher
+.github/agent-pipeline/cloud-bridge.mjs  Codex Cloud relay contract
 .github/agent-pipeline/prompts/      model stage contracts
 .github/agent-pipeline/schemas/      structured-output and state schemas
 .github/agent-pipeline/test/         policy and controller regression tests
 .github/agent-pipeline/team.yaml     ownership and risk policy
-.github/workflows/issue-review.yml   GitHub Actions orchestration
+.github/workflows/issue-review.yml   trusted default-branch controller/publisher
+.github/workflows/pr-validation.yml  secret-free pull-request validation
 docs/git-ground-rules.md             authoritative repository policy
 ```
 
@@ -35,15 +37,24 @@ docs/git-ground-rules.md             authoritative repository policy
 
 The committed workflow contains secret names but no secret values. A human
 maintainer must review the protected workflow and ownership files, replace the
-placeholder accounts in `.github/agent-pipeline/team.yaml`, install the
-repository-scoped GitHub App, and configure the referenced repository variables
-and secrets through GitHub settings.
+remaining placeholder accounts in `.github/agent-pipeline/team.yaml`, install the
+repository-scoped GitHub App, and configure the referenced repository variable
+and App secret through GitHub settings. For this public repository the workflow
+only archives SHA-bound Cloud requests and fails closed; authenticated execution
+belongs to an external, non-Actions relay. See [the Cloud relay runbook](docs/codex-cloud-migration.md).
 
 Never commit an App private key, API key, `.env` file, local `.npmrc`, or runner
 artifact. See [the publication checklist](docs/publication-checklist.md),
 [`.gitignore`](.gitignore), and
 [`docs/git-ground-rules.md`](docs/git-ground-rules.md) for the publication and
 trust-boundary rules.
+
+Automated Issue work uses `agent/issue-*` branches and the deterministic App
+publisher. An explicit request in an interactive Codex task may instead prepare
+and publish maintenance changes without first creating a synthetic Issue. The
+default is a `codex/maintenance-*` draft PR; an explicit instruction to publish
+to the default branch permits one validated fast-forward commit. Force-push and
+self-approval/self-merge remain forbidden.
 
 ## License
 
