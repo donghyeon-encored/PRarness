@@ -37,6 +37,267 @@ repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || {
 }
 cd "$repo_root"
 
+local_head=$(git rev-parse --verify HEAD 2>/dev/null) || {
+  echo 'Codex Cloud checkout has no commit to identify.' >&2
+  exit 2
+}
+
+github_api_get() {
+  local credential=$1
+  local url=$2
+  curl --fail --silent --show-error --location \
+    -H "Authorization: Bearer $credential" \
+    -H 'Accept: application/vnd.github+json' \
+    -H 'X-GitHub-Api-Version: 2022-11-28' \
+    "$url"
+}
+
+github_api_post() {
+  local credential=$1
+  local body=$2
+  local url=$3
+  curl --fail --silent --show-error --location \
+    -X POST \
+    -H "Authorization: Bearer $credential" \
+    -H 'Accept: application/vnd.github+json' \
+    -H 'X-GitHub-Api-Version: 2022-11-28' \
+    -d "$body" \
+    "$url"
+}
+
+base64url() {
+  openssl base64 -A | tr '+/' '-_' | tr -d '='
+}
+
+require_app_commands() {
+  local command_name
+  for command_name in curl jq openssl; do
+    command -v "$command_name" >/dev/null 2>&1 || {
+      echo "GitHub App authentication requires $command_name." >&2
+      return 2
+    }
+  done
+}
+
+create_app_jwt() {
+  require_app_commands || return $?
+
+  local app_id=${AGENT_APP_ID:-}
+  local private_key=${AGENT_APP_PRIVATE_KEY:-}
+  if [[ -z $app_id || -z $private_key ]]; then
+    return 1
+  fi
+  if [[ ! $app_id =~ ^[1-9][0-9]*$ ]]; then
+    echo 'AGENT_APP_ID must be a positive integer.' >&2
+    return 2
+  fi
+
+  local key_file
+  key_file=$(mktemp)
+  chmod 600 "$key_file"
+  trap 'rm -f "${key_file:-}"' RETURN
+  printf '%s\n' "$private_key" > "$key_file"
+
+  local now issued_at expires_at header payload unsigned signature
+  now=$(date +%s)
+  issued_at=$((now - 60))
+  expires_at=$((now + 540))
+  header=$(printf '%s' '{"alg":"RS256","typ":"JWT"}' | base64url)
+  payload=$(printf '{"iat":%s,"exp":%s,"iss":"%s"}' "$issued_at" "$expires_at" "$app_id" | base64url)
+  unsigned="$header.$payload"
+  signature=$(printf '%s' "$unsigned" | openssl dgst -sha256 -sign "$key_file" | base64url)
+  printf '%s.%s' "$unsigned" "$signature"
+
+  rm -f "$key_file"
+  trap - RETURN
+}
+
+valid_repository_name() {
+  local candidate=${1:-}
+  local owner=${candidate%%/*}
+  local repo_name=${candidate#*/}
+  [[ $candidate =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || return 1
+  [[ $owner != '.' && $owner != '..' && $repo_name != '.' && $repo_name != '..' ]]
+}
+
+repository_contains_checkout_head() {
+  local credential=$1
+  local candidate=$2
+  valid_repository_name "$candidate" || return 1
+  curl --fail --silent --location --output /dev/null \
+    -H "Authorization: Bearer $credential" \
+    -H 'Accept: application/vnd.github+json' \
+    -H 'X-GitHub-Api-Version: 2022-11-28' \
+    "${api_url}/repos/${candidate}/git/commits/${local_head}" 2>/dev/null
+}
+
+resolve_unique_match() {
+  local source_name=$1
+  shift
+  local -a matches=("$@")
+  if (( ${#matches[@]} == 1 )); then
+    printf '%s' "${matches[0]}"
+    return 0
+  fi
+  if (( ${#matches[@]} > 1 )); then
+    echo "GitHub ${source_name} discovery found multiple repositories containing the checkout HEAD; set CODEX_GITHUB_REPOSITORY to disambiguate." >&2
+    return 2
+  fi
+  echo "GitHub ${source_name} discovery found no accessible repository containing the checkout HEAD." >&2
+  return 2
+}
+
+validate_discovery_limit() {
+  local limit=${PRARNESS_GITHUB_DISCOVERY_MAX_REPOSITORIES:-1000}
+  if [[ ! $limit =~ ^[1-9][0-9]*$ ]] || (( limit > 5000 )); then
+    echo 'PRARNESS_GITHUB_DISCOVERY_MAX_REPOSITORIES must be an integer from 1 through 5000.' >&2
+    return 2
+  fi
+  printf '%s' "$limit"
+}
+
+discover_repository_with_token() {
+  local token=$1
+  local limit
+  limit=$(validate_discovery_limit) || return $?
+  command -v curl >/dev/null 2>&1 || {
+    echo 'GitHub token repository discovery requires curl.' >&2
+    return 2
+  }
+  command -v jq >/dev/null 2>&1 || {
+    echo 'GitHub token repository discovery requires jq.' >&2
+    return 2
+  }
+
+  local page=1 scanned=0 response count candidate existing already_seen
+  local -a matches=()
+  while (( page <= 100 )); do
+    response=$(github_api_get "$token" "${api_url}/user/repos?affiliation=owner,collaborator,organization_member&per_page=100&page=${page}") || {
+      echo 'GitHub token repository discovery could not list accessible repositories.' >&2
+      return 2
+    }
+    printf '%s' "$response" | jq -e 'type == "array"' >/dev/null || {
+      echo 'GitHub token repository discovery returned an invalid repository list.' >&2
+      return 2
+    }
+    count=$(printf '%s' "$response" | jq 'length')
+    while IFS= read -r candidate; do
+      [[ -n $candidate ]] || continue
+      scanned=$((scanned + 1))
+      if (( scanned > limit )); then
+        echo "GitHub token repository discovery exceeded its ${limit}-repository safety limit." >&2
+        return 2
+      fi
+      if repository_contains_checkout_head "$token" "$candidate"; then
+        already_seen=false
+        for existing in "${matches[@]-}"; do
+          if [[ $existing == "$candidate" ]]; then
+            already_seen=true
+            break
+          fi
+        done
+        if [[ $already_seen == false ]]; then
+          matches+=("$candidate")
+        fi
+      fi
+    done < <(printf '%s' "$response" | jq -r '.[]?.full_name // empty')
+    (( count < 100 )) && break
+    page=$((page + 1))
+  done
+  resolve_unique_match 'token' "${matches[@]-}"
+}
+
+discover_repository_with_app() {
+  local jwt
+  jwt=$(create_app_jwt) || return $?
+  local limit
+  limit=$(validate_discovery_limit) || return $?
+
+  local configured_installation=${AGENT_APP_INSTALLATION_ID:-}
+  local page=1 response count installation_id
+  local -a installation_ids=()
+  if [[ -n $configured_installation ]]; then
+    if [[ ! $configured_installation =~ ^[1-9][0-9]*$ ]]; then
+      echo 'AGENT_APP_INSTALLATION_ID must be a positive integer.' >&2
+      return 2
+    fi
+    installation_ids+=("$configured_installation")
+  else
+    while (( page <= 100 )); do
+      response=$(github_api_get "$jwt" "${api_url}/app/installations?per_page=100&page=${page}") || {
+        echo 'GitHub App repository discovery could not list App installations.' >&2
+        return 2
+      }
+      printf '%s' "$response" | jq -e 'type == "array"' >/dev/null || {
+        echo 'GitHub App repository discovery returned an invalid installation list.' >&2
+        return 2
+      }
+      count=$(printf '%s' "$response" | jq 'length')
+      while IFS= read -r installation_id; do
+        [[ -n $installation_id ]] && installation_ids+=("$installation_id")
+      done < <(printf '%s' "$response" | jq -r '.[].id // empty')
+      (( count < 100 )) && break
+      page=$((page + 1))
+    done
+  fi
+
+  if (( ${#installation_ids[@]} == 0 )); then
+    echo 'GitHub App repository discovery found no App installations.' >&2
+    return 2
+  fi
+
+  local discovery_body discovery_response discovery_token candidate existing already_seen scanned=0
+  local -a matches=()
+  discovery_body=$(jq -cn '{permissions:{contents:"read"}}')
+  for installation_id in "${installation_ids[@]}"; do
+    discovery_response=$(github_api_post "$jwt" "$discovery_body" "${api_url}/app/installations/${installation_id}/access_tokens") || {
+      echo 'GitHub App repository discovery could not create a read-only installation token.' >&2
+      return 2
+    }
+    discovery_token=$(printf '%s' "$discovery_response" | jq -er '.token') || {
+      echo 'GitHub App repository discovery received an invalid installation token response.' >&2
+      return 2
+    }
+
+    page=1
+    while (( page <= 100 )); do
+      response=$(github_api_get "$discovery_token" "${api_url}/installation/repositories?per_page=100&page=${page}") || {
+        echo 'GitHub App repository discovery could not list installation repositories.' >&2
+        return 2
+      }
+      printf '%s' "$response" | jq -e '.repositories | type == "array"' >/dev/null || {
+        echo 'GitHub App repository discovery returned an invalid repository list.' >&2
+        return 2
+      }
+      count=$(printf '%s' "$response" | jq '.repositories | length')
+      while IFS= read -r candidate; do
+        [[ -n $candidate ]] || continue
+        scanned=$((scanned + 1))
+        if (( scanned > limit )); then
+          echo "GitHub App repository discovery exceeded its ${limit}-repository safety limit." >&2
+          return 2
+        fi
+        if repository_contains_checkout_head "$discovery_token" "$candidate"; then
+          already_seen=false
+          for existing in "${matches[@]-}"; do
+            if [[ $existing == "$candidate" ]]; then
+              already_seen=true
+              break
+            fi
+          done
+          if [[ $already_seen == false ]]; then
+            matches+=("$candidate")
+          fi
+        fi
+      done < <(printf '%s' "$response" | jq -r '.repositories[]?.full_name // empty')
+      (( count < 100 )) && break
+      page=$((page + 1))
+    done
+    unset discovery_token
+  done
+  resolve_unique_match 'App' "${matches[@]-}"
+}
+
 repository_from_remote_url() {
   local url=${1:-}
   local candidate=''
@@ -49,7 +310,7 @@ repository_from_remote_url() {
   esac
   candidate=${candidate%/}
   candidate=${candidate%.git}
-  if [[ $candidate =~ ^[^/[:space:]]+/[^/[:space:]]+$ ]]; then
+  if valid_repository_name "$candidate"; then
     printf '%s' "$candidate"
     return 0
   fi
@@ -94,12 +355,28 @@ detect_repository() {
     echo 'Codex Cloud GitHub setup found multiple GitHub repositories in the checkout remotes.' >&2
     return 2
   fi
-  echo 'Set CODEX_GITHUB_REPOSITORY=owner/repository when the Cloud checkout has no GitHub remote.' >&2
+
+  local token=${CODEX_GITHUB_TOKEN:-${GH_TOKEN:-${GITHUB_TOKEN:-}}}
+  if [[ -n $token ]]; then
+    discover_repository_with_token "$token"
+    return $?
+  fi
+
+  if [[ -n ${AGENT_APP_ID:-} || -n ${AGENT_APP_PRIVATE_KEY:-} ]]; then
+    if [[ -z ${AGENT_APP_ID:-} || -z ${AGENT_APP_PRIVATE_KEY:-} ]]; then
+      echo 'GitHub App repository discovery requires both AGENT_APP_ID and AGENT_APP_PRIVATE_KEY.' >&2
+      return 2
+    fi
+    discover_repository_with_app
+    return $?
+  fi
+
+  echo 'Unable to identify the Cloud checkout. Configure a GitHub token or App credentials; use CODEX_GITHUB_REPOSITORY only to resolve ambiguity.' >&2
   return 2
 }
 
 repository=$(detect_repository "${1:-}") || exit $?
-if [[ ! $repository =~ ^[^/[:space:]]+/[^/[:space:]]+$ ]]; then
+if ! valid_repository_name "$repository"; then
   echo 'Codex Cloud GitHub repository must use owner/repository format.' >&2
   exit 2
 fi
@@ -111,63 +388,23 @@ else
   git remote add origin "$remote_url"
 fi
 
-base64url() {
-  openssl base64 -A | tr '+/' '-_' | tr -d '='
-}
-
 mint_installation_token() {
-  for command_name in curl jq openssl; do
-    command -v "$command_name" >/dev/null 2>&1 || {
-      echo "GitHub App authentication requires $command_name." >&2
-      return 2
-    }
-  done
-
-  local app_id=${AGENT_APP_ID:-}
-  local private_key=${AGENT_APP_PRIVATE_KEY:-}
-  if [[ -z $app_id || -z $private_key ]]; then
-    return 1
-  fi
-
-  local key_file
-  key_file=$(mktemp)
-  chmod 600 "$key_file"
-  trap 'rm -f "$key_file"' RETURN
-  printf '%s\n' "$private_key" > "$key_file"
-
-  local now issued_at expires_at header payload unsigned signature jwt
-  now=$(date +%s)
-  issued_at=$((now - 60))
-  expires_at=$((now + 540))
-  header=$(printf '%s' '{"alg":"RS256","typ":"JWT"}' | base64url)
-  payload=$(printf '{"iat":%s,"exp":%s,"iss":"%s"}' "$issued_at" "$expires_at" "$app_id" | base64url)
-  unsigned="$header.$payload"
-  signature=$(printf '%s' "$unsigned" | openssl dgst -sha256 -sign "$key_file" | base64url)
-  jwt="$unsigned.$signature"
-  rm -f "$key_file"
-  trap - RETURN
+  local jwt
+  jwt=$(create_app_jwt) || return $?
 
   local owner=${repository%%/*}
   local repo_name=${repository#*/}
   local installation_id=${AGENT_APP_INSTALLATION_ID:-}
   if [[ -z $installation_id ]]; then
-    installation_id=$(curl --fail --silent --show-error \
-      -H "Authorization: Bearer $jwt" \
-      -H 'Accept: application/vnd.github+json' \
-      -H 'X-GitHub-Api-Version: 2022-11-28' \
-      "${api_url}/repos/${owner}/${repo_name}/installation" \
-      | jq -er '.id')
+    installation_id=$(github_api_get "$jwt" "${api_url}/repos/${owner}/${repo_name}/installation" | jq -er '.id')
+  elif [[ ! $installation_id =~ ^[1-9][0-9]*$ ]]; then
+    echo 'AGENT_APP_INSTALLATION_ID must be a positive integer.' >&2
+    return 2
   fi
 
   local request_body response
   request_body=$(jq -cn --arg repo "$repo_name" '{repositories:[$repo],permissions:{actions:"write",contents:"write",issues:"write",pull_requests:"write",workflows:"write"}}')
-  response=$(curl --fail --silent --show-error \
-    -X POST \
-    -H "Authorization: Bearer $jwt" \
-    -H 'Accept: application/vnd.github+json' \
-    -H 'X-GitHub-Api-Version: 2022-11-28' \
-    -d "$request_body" \
-    "${api_url}/app/installations/${installation_id}/access_tokens")
+  response=$(github_api_post "$jwt" "$request_body" "${api_url}/app/installations/${installation_id}/access_tokens")
   printf '%s' "$response" | jq -er '.token'
 }
 

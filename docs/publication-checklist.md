@@ -45,14 +45,16 @@ procedure.
   `auth.json` into Actions.
 - Configure the pinned CLI path only in the external relay's local service
   configuration; never expose that service account to repository jobs.
-- Create a repository-specific Codex Cloud environment and add its ID as the
-  `CODEX_CLOUD_ENV_ID` repository variable. In that Cloud environment, add
+- Create or select a Codex Cloud environment for the target repository and add
+  its ID as the `CODEX_CLOUD_ENV_ID` repository variable. In that environment, add
   either `CODEX_GITHUB_TOKEN` or `AGENT_APP_ID` plus
   `AGENT_APP_PRIVATE_KEY` (and optionally `AGENT_APP_INSTALLATION_ID`) as setup
   credentials. Never put their values in repository files.
-- Set `CODEX_GITHUB_REPOSITORY=OWNER/REPO` in the Cloud environment when its
-  checkout has no parseable GitHub remote. This is the only target-specific
-  bootstrap value; never hard-code a repository name in the setup script.
+- Install the configured GitHub App on every intended target repository. A
+  checkout without a GitHub remote is matched automatically against accessible
+  repositories by its HEAD commit. Set `CODEX_GITHUB_REPOSITORY=OWNER/REPO`
+  only to resolve multiple matches, such as forks sharing the same commit;
+  never hard-code a target repository in the setup script.
 - Configure both the Cloud setup script and maintenance script with the same
   SHA-pinned, repository-independent installer from
   `docs/codex-cloud-migration.md`. It installs

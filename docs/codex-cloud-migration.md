@@ -55,11 +55,13 @@ https://learn.chatgpt.com/docs/cloud.
 2. Pin the reviewed bridge and `codex` executable to the versions recorded in
    the request. Launch the CLI from an empty, relay-owned control directory,
    never from an untrusted checkout.
-3. Create a repository-specific Cloud environment. Add
+3. In every Cloud environment that runs PRarness, add
    `CODEX_GITHUB_TOKEN`, or add `AGENT_APP_ID` and
-   `AGENT_APP_PRIVATE_KEY` plus optional `AGENT_APP_INSTALLATION_ID`. If the
-   Cloud checkout has no GitHub remote, add the non-secret environment value
-   `CODEX_GITHUB_REPOSITORY=OWNER/REPO`.
+   `AGENT_APP_PRIVATE_KEY` plus optional `AGENT_APP_INSTALLATION_ID`. Install
+   that App on every repository the environment may operate on. The bootstrap
+   discovers a remote-less checkout automatically; set the non-secret
+   `CODEX_GITHUB_REPOSITORY=OWNER/REPO` override only when multiple accessible
+   repositories contain the same checkout HEAD, as can happen with forks.
 4. Configure both setup and maintenance scripts with this same generic loader,
    replacing `REVIEWED_PRARNESS_COMMIT_SHA` with a reviewed 40-character
    PRarness commit SHA:
@@ -75,9 +77,17 @@ https://learn.chatgpt.com/docs/cloud.
    The loader installs `$HOME/.local/bin/prarness-github-setup`; it resolves the
    target from an explicit argument, `CODEX_GITHUB_REPOSITORY`,
    `GITHUB_REPOSITORY`, or exactly one parseable GitHub remote, in that order.
+   With none of those available, it lists repositories accessible to the
+   configured token or GitHub App and selects the only repository containing
+   the local checkout HEAD. Zero or multiple matches fail closed without
+   logging private repository names. Discovery scans at most 1,000 repositories
+   by default; `PRARNESS_GITHUB_DISCOVERY_MAX_REPOSITORIES` may raise that
+   safety limit to at most 5,000 for a large installation.
+
    Every fresh or resumed container repairs `origin`, refreshes authentication,
    and verifies `gh` plus Git access before the agent phase. Target repositories
-   do not need to copy `.github/agent-pipeline/**` from PRarness.
+   do not need to copy `.github/agent-pipeline/**` from PRarness or define a
+   repository-specific setup script.
 5. Add its non-secret ID as the repository variable `CODEX_CLOUD_ENV_ID` so
    request construction is deterministic.
 6. Keep raw requests, task URLs, task status, downloaded diff hashes, and
