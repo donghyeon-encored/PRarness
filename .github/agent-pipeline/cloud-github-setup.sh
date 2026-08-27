@@ -452,6 +452,15 @@ mint_installation_token() {
   printf '%s' "$response" | jq -er '.token'
 }
 
+configure_gh_default_repository() {
+  local resolution_key
+  while IFS= read -r resolution_key; do
+    [[ -n $resolution_key ]] || continue
+    git config --local --unset-all "$resolution_key" >/dev/null 2>&1 || true
+  done < <(git config --local --name-only --get-regexp '^remote\..*\.gh-resolved$' 2>/dev/null || true)
+  git config --local --add remote.origin.gh-resolved base
+}
+
 if [[ $mode == configure ]]; then
   token=${CODEX_GITHUB_TOKEN:-${GH_TOKEN:-${GITHUB_TOKEN:-}}}
   if [[ -z $token ]]; then
@@ -490,7 +499,7 @@ git config --local user.name "${CODEX_GIT_AUTHOR_NAME:-codex-cloud}"
 git config --local user.email "${CODEX_GIT_AUTHOR_EMAIL:-codex-cloud@users.noreply.github.com}"
 
 gh api "repos/$repository" --jq '.full_name' | grep -Fqx "$repository"
-gh repo set-default "$repository"
+configure_gh_default_repository
 git ls-remote --exit-code origin HEAD >/dev/null
 
 echo "Codex Cloud GitHub access ready: origin -> $remote_url; gh -> $repository"

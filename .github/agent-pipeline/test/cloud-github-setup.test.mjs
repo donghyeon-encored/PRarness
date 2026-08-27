@@ -35,7 +35,10 @@ if [[ $1 == api ]]; then
   printf '%s\\n' "$TEST_REPOSITORY"
   exit 0
 fi
-if [[ $1 == repo && $2 == set-default ]]; then exit 0; fi
+if [[ $1 == repo && $2 == set-default ]]; then
+  printf '%s\\n' 'HTTP 401: Requires authentication (https://api.github.com/graphql)' >&2
+  exit 1
+fi
 if [[ $1 == auth && $2 == git-credential ]]; then exit 0; fi
 exit 7
 `);
@@ -106,6 +109,8 @@ function appPrivateKey() {
 async function assertConfigured(context, repository, token = "github_pat_test_token") {
   const origin = await exec(context.realGit, ["remote", "get-url", "origin"], { cwd: context.repo });
   assert.equal(origin.stdout.trim(), `https://github.com/${repository}.git`);
+  const resolution = await exec(context.realGit, ["config", "--local", "--get-regexp", "^remote\\..*\\.gh-resolved$"], { cwd: context.repo });
+  assert.equal(resolution.stdout.trim(), "remote.origin.gh-resolved base");
   const hosts = await readFile(join(context.home, ".config/gh/hosts.yml"), "utf8");
   assert.match(hosts, new RegExp(`oauth_token: ${token}`));
 }

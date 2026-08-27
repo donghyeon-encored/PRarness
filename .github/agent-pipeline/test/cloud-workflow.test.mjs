@@ -58,6 +58,7 @@ test("Cloud workers bootstrap GitHub and are encouraged to own scoped writes", a
   assert.match(setup, /multiple repositories containing the checkout HEAD/);
   assert.match(setup, /workflows:\"write\"/);
   assert.match(setup, /oauth_token/);
-  assert.match(setup, /gh repo set-default/);
+  assert.match(setup, /remote\.origin\.gh-resolved base/);
+  assert.doesNotMatch(setup, /gh repo set-default/);
   assert.match(setup, /git ls-remote --exit-code origin HEAD/);
 });

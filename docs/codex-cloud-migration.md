@@ -94,9 +94,13 @@ https://learn.chatgpt.com/docs/cloud.
    safety limit to at most 5,000 for a large installation.
 
    Every fresh or resumed container repairs `origin`, refreshes authentication,
-   and verifies `gh` plus Git access before the agent phase. Target repositories
-   do not need to copy `.github/agent-pipeline/**` from PRarness or define a
-   repository-specific setup script.
+   and verifies `gh` plus Git access before the agent phase. After a successful
+   REST repository check, it records `origin` as the local `gh` default without
+   invoking `gh repo set-default`; that command performs an additional GraphQL
+   repository-network query that can reject an otherwise valid GitHub App
+   installation token. Target repositories do not need to copy
+   `.github/agent-pipeline/**` from PRarness or define a repository-specific
+   setup script.
 5. Add its non-secret ID as the repository variable `CODEX_CLOUD_ENV_ID` so
    request construction is deterministic.
 6. Keep raw requests, task URLs, task status, downloaded diff hashes, and
