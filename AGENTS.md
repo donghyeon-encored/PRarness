@@ -6,19 +6,21 @@ Before working, read:
 Those files are the authoritative team and repository policies.
 
 Automated Issue-driven runs must not modify protected pipeline, workflow,
-ownership, or secret-related files unless the source Issue explicitly requests
-the exact change and the protected-path policy passes.
+ownership, policy, or secret-related files. Those changes use interactive
+maintenance after an explicit user request.
 
 Codex Cloud workers are expected to manage the source Issue, canonical
-comments, `agent/issue-*` branch, commits, and draft pull request directly. Run
-`$HOME/.local/bin/prarness-repository-check --repository OWNER/REPO` and then
-`$HOME/.local/bin/prarness-github-setup --verify-write OWNER/REPO` first; the
-Cloud environment installs this versioned repository-independent runtime before
-the agent phase. Use `prarness-publish` for code-bearing branch/PR/CI publication,
-and `prarness-github` for verified Issue, comment, CI, deployment, and reconcile operations
-instead of asking a person to log in. Keep writes scoped to the source Issue and
-its managed branch/PR, never force-push or merge, and never print or extract the
-configured credential.
+comments, `agent/issue-*` branch, commit, draft pull request, and configured CI
+directly. The Cloud environment installs the pinned repository-independent
+runtime before the agent phase. First run
+`$HOME/.local/bin/prarness-github-setup --verify OWNER/REPO`, then run
+`$HOME/.local/bin/prarness-session prepare` with the repository, source Issue,
+and bootstrap PR from the task. Follow the returned pinned
+`prompts/cloud-session.md` contract through validation and publication. Use
+`prarness-github` for separately verified Issue, comment, CI, deployment, and
+reconcile operations instead of asking a person to log in. Keep writes scoped
+to the source Issue and its managed branch/PR, never force-push or merge, and
+never print or extract the configured credential.
 
 In an interactive Codex maintenance task, an explicit user request to maintain
 those files authorizes editing them. No separate GitHub Issue is required. The

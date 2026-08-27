@@ -46,13 +46,14 @@ ci:
   await exec(realGit, ["switch", "-q", "-c", "agent/issue-1-fix"], { cwd: repo });
   await writeFile(join(repo, "src/app.js"), "export const value = 2;\n");
   await exec(realGit, ["add", "src/app.js"], { cwd: repo });
-  await exec(realGit, ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "fix"], { cwd: repo });
+  await exec(realGit, ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "fix\n\nRefs #1\nAgent-Iteration: 1"], { cwd: repo });
   const headSha = (await exec(realGit, ["rev-parse", "HEAD"], { cwd: repo })).stdout.trim();
 
   await writeFile(join(bin, "git"), `#!/usr/bin/env bash
-if [[ $1 == push ]]; then exit 0; fi
+if [[ $1 == push ]]; then touch "$TEST_PUSH_MARKER"; exit 0; fi
 if [[ $1 == ls-remote && $2 == --heads ]]; then
-  printf '%s\\trefs/heads/agent/issue-1-fix\\n' "$TEST_REMOTE_SHA"
+  if [[ -f "$TEST_PUSH_MARKER" ]]; then remote_sha=$TEST_REMOTE_AFTER; else remote_sha=$TEST_REMOTE_BEFORE; fi
+  printf '%s\\trefs/heads/agent/issue-1-fix\\n' "$remote_sha"
   exit 0
 fi
 exec ${JSON.stringify(realGit)} "$@"
@@ -94,7 +95,7 @@ exit 2
     installation_id: "123",
     permissions: { contents: "write", issues: "write", pull_requests: "write", actions: "write", checks: "write", deployments: "write" },
   }));
-  return { authMetadata, bin, headSha, repo, request, sourceSha, validation };
+  return { authMetadata, bin, headSha, pushMarker: join(directory, "pushed"), repo, request, sourceSha, validation };
 }
 
 function json(data, status = 200) {
@@ -104,39 +105,40 @@ function json(data, status = 200) {
 test("Cloud publisher confirms the pushed SHA and live REST pull request", async () => {
   const context = await fixture();
   const priorPath = process.env.PATH;
-  const priorRemoteSha = process.env.TEST_REMOTE_SHA;
+  const priorRemoteBefore = process.env.TEST_REMOTE_BEFORE;
+  const priorRemoteAfter = process.env.TEST_REMOTE_AFTER;
+  const priorPushMarker = process.env.TEST_PUSH_MARKER;
   const priorAppId = process.env.AGENT_APP_ID;
   const priorFetch = globalThis.fetch;
   process.env.PATH = `${context.bin}:${priorPath}`;
-  process.env.TEST_REMOTE_SHA = context.headSha;
+  process.env.TEST_REMOTE_BEFORE = context.sourceSha;
+  process.env.TEST_REMOTE_AFTER = context.headSha;
+  process.env.TEST_PUSH_MARKER = context.pushMarker;
   process.env.AGENT_APP_ID = "42";
   const comments = [];
   const commentById = new Map();
-  let pull = null;
+  let pull = {
+    number: 7,
+    html_url: "https://github.com/owner/repo/pull/7",
+    state: "open",
+    merged: false,
+    draft: true,
+    head: { ref: "agent/issue-1-fix", sha: context.headSha, repo: { full_name: "owner/repo" } },
+    base: { ref: "main", sha: context.sourceSha, repo: { full_name: "owner/repo" } },
+  };
   globalThis.fetch = async (url, options = {}) => {
     const parsed = new URL(url);
     const path = `${parsed.pathname}${parsed.search}`;
     const method = options.method ?? "GET";
     if (method === "GET" && path === "/repos/owner/repo") return json({ full_name: "owner/repo", default_branch: "main" });
-    if (method === "GET" && path.startsWith("/repos/owner/repo/pulls?")) return json([]);
+    if (method === "GET" && path.startsWith("/repos/owner/repo/pulls?")) return json([pull]);
     if (method === "GET" && path === "/repos/owner/repo/commits/main") return json({ sha: context.sourceSha });
     if (method === "GET" && path === "/repos/owner/repo/issues/1/comments?per_page=100&page=1") return json(comments);
     if (method === "GET" && path === `/repos/owner/repo/commits/${context.headSha}/check-runs?per_page=100`) return json({ check_runs: [
       { id: 50, name: "Test CI", status: "completed", conclusion: "success", head_sha: context.headSha, app: { slug: "github-actions" }, details_url: "https://github.com/owner/repo/actions/runs/50" },
     ] });
     if (method === "GET" && path === "/repos/owner/repo/assignees/reviewer") return json({ login: "reviewer" });
-    if (method === "POST" && path === "/repos/owner/repo/pulls") {
-      pull = {
-        number: 7,
-        html_url: "https://github.com/owner/repo/pull/7",
-        state: "open",
-        merged: false,
-        draft: true,
-        head: { ref: "agent/issue-1-fix", sha: context.headSha, repo: { full_name: "owner/repo" } },
-        base: { ref: "main", sha: context.sourceSha, repo: { full_name: "owner/repo" } },
-      };
-      return json(pull, 201);
-    }
+    if (method === "PATCH" && path === "/repos/owner/repo/pulls/7") { pull = { ...pull, ...JSON.parse(options.body) }; return json(pull); }
     if (method === "POST" && path === "/repos/owner/repo/pulls/7/requested_reviewers") return json({ requested_reviewers: [{ login: "reviewer" }] }, 201);
     if (method === "PATCH" && path === "/repos/owner/repo/issues/7") return json({ number: 7, assignees: [{ login: "reviewer" }] });
     if (method === "POST" && path === "/repos/owner/repo/issues/1/comments") {
@@ -163,10 +165,13 @@ test("Cloud publisher confirms the pushed SHA and live REST pull request", async
     assert.equal(result.remote_sha, context.headSha);
     assert.equal(result.pr_url, "https://github.com/owner/repo/pull/7");
     assert.equal(result.draft, true);
+    assert.equal(result.reused, true);
     assert.equal(result.completion_comment, 13);
   } finally {
     process.env.PATH = priorPath;
-    if (priorRemoteSha === undefined) delete process.env.TEST_REMOTE_SHA; else process.env.TEST_REMOTE_SHA = priorRemoteSha;
+    if (priorRemoteBefore === undefined) delete process.env.TEST_REMOTE_BEFORE; else process.env.TEST_REMOTE_BEFORE = priorRemoteBefore;
+    if (priorRemoteAfter === undefined) delete process.env.TEST_REMOTE_AFTER; else process.env.TEST_REMOTE_AFTER = priorRemoteAfter;
+    if (priorPushMarker === undefined) delete process.env.TEST_PUSH_MARKER; else process.env.TEST_PUSH_MARKER = priorPushMarker;
     if (priorAppId === undefined) delete process.env.AGENT_APP_ID; else process.env.AGENT_APP_ID = priorAppId;
     globalThis.fetch = priorFetch;
   }

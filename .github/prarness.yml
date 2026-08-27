@@ -1,7 +1,13 @@
 version: 1
+repository: donghyeon-encored/PRarness
 
 runtime:
   contract: 1
+
+dispatch:
+  mode: human_pr_mention
+  label: agent:run
+  auto_on_open_for_trusted: true
 
 publication:
   mode: codex_cloud_direct

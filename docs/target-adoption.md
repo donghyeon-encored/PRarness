@@ -1,18 +1,23 @@
 # Target repository adoption
 
-PRarness target repositories use a central runtime and keep only
-repository-specific policy. Do not copy `.github/agent-pipeline/**`, its tests,
-prompts, schemas, or PRarness ground rules into a target checkout.
+Each target keeps a thin adapter. Replace every placeholder SHA below with the
+same reviewed 40-character PRarness commit.
 
-## Minimal target configuration
+## 1. Repository configuration
 
 Commit and protect `.github/prarness.yml`:
 
 ```yaml
 version: 1
+repository: OWNER/REPOSITORY
 
 runtime:
   contract: 1
+
+dispatch:
+  mode: human_pr_mention
+  label: agent:run
+  auto_on_open_for_trusted: true
 
 publication:
   mode: codex_cloud_direct
@@ -20,7 +25,7 @@ publication:
 
 ownership:
   source: codeowners
-  fallback: your-maintainer-login
+  fallback: MAINTAINER_LOGIN
 
 validation:
   commands:
@@ -41,27 +46,54 @@ protected_paths:
     - infra/production/**
 ```
 
-Keep `AGENTS.md` or `CLAUDE.md` only for the target application's own
-development instructions. Remove copied central rules and any legacy statement
-that prohibits a Codex Cloud worker from updating its source Issue, canonical
-comments, managed branch, or draft PR. The worker remains forbidden to write
-outside that scope, force-push, approve, or merge.
+`repository` prevents a copied adapter from silently writing to the wrong
+repository. Keep target-specific development instructions in `AGENTS.md` or
+`CLAUDE.md`, but remove copied PRarness policy and any legacy rule that blocks
+the Cloud worker's scoped Issue/branch/PR writes.
 
-## Cloud environment
+## 2. Hostless intake workflow
 
-Configure the SHA-pinned loader from `docs/codex-cloud-migration.md` as both the
-setup and maintenance script. Add `AGENT_APP_ID` and `AGENT_APP_PRIVATE_KEY` to
-the Cloud environment once; no target Actions secret or repository variable is
-needed. The ordinary App installation needs Contents, Issues, Pull requests,
-Actions, Checks, and Deployments write permission. The setup discovers a remote-less checkout when unambiguous;
-`CODEX_GITHUB_REPOSITORY=OWNER/REPO` is only an ambiguity override.
+Commit `.github/workflows/prarness-intake.yml`:
 
-The loader installs the reviewed runtime outside the Git checkout. Nothing
-under `$HOME/.local/share/prarness/` appears in the target diff or commit.
+```yaml
+name: PRarness Issue intake
 
-If the target has no existing secret-free CI, keep this thin caller as
-`.github/workflows/prarness-ci.yml` and replace the ref with the same reviewed
-40-character PRarness commit used by Cloud setup:
+on:
+  issues:
+    types: [opened, reopened, labeled]
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: Existing source Issue number
+        required: true
+        type: number
+
+permissions: read-all
+
+concurrency:
+  group: prarness-intake-${{ github.event.issue.number || inputs.issue_number || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  intake:
+    if: github.event_name != 'issue_comment' || !github.event.issue.pull_request
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    uses: donghyeon-encored/PRarness/.github/workflows/reusable-intake.yml@REVIEWED_40_CHARACTER_COMMIT_SHA
+    with:
+      runtime_ref: REVIEWED_40_CHARACTER_COMMIT_SHA
+```
+
+This workflow has no repository secret. Its scoped `GITHUB_TOKEN` creates only
+the bootstrap branch, draft PR, labels, and canonical intake comment.
+
+## 3. Secret-free CI
+
+Use an existing PR workflow or add `.github/workflows/prarness-ci.yml`:
 
 ```yaml
 name: PRarness CI
@@ -69,7 +101,6 @@ name: PRarness CI
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -79,41 +110,26 @@ jobs:
     uses: donghyeon-encored/PRarness/.github/workflows/reusable-validation.yml@REVIEWED_40_CHARACTER_COMMIT_SHA
 ```
 
-The reusable workflow checks out the exact caller revision and runs only the
-commands protected in `.github/prarness.yml`. It receives no repository secret
-and grants only `contents: read`. Repositories with language-specific setup or
-deployment logic may point the CI contract at their existing workflow instead.
+The configured `required_checks` strings must exactly match the resulting live
+check names.
 
-## Migration order
+## 4. Cloud environment
 
-1. Add and protect `.github/prarness.yml`.
-2. Remove conflicting legacy publication instructions.
-3. Configure the same pinned loader in Cloud setup and maintenance.
-4. Confirm `prarness-repository-check` and
-   `prarness-github-setup --verify-write` pass before model work.
-5. Run one implementation canary and accept it only when `prarness-publish`
-   returns a verified PR URL, matching remote SHA, both App-authored canonical
-   comment IDs, and successful required CI checks.
-6. Remove the target's copied PRarness runtime only after the new path passes.
-7. Start the central `github-app-controller.mjs` webhook receiver and relay
-   dispatcher, then remove the target's large Issue controller. Keep only the
-   secret-free CI workflow named by `.github/prarness.yml`.
+Create/select the Codex Cloud environment connected to the target repository.
+Use the runbook in `codex-cloud-migration.md` for both setup and maintenance.
+Store the GitHub App ID and private key there once. Do not add them to GitHub
+Actions secrets or repository files.
 
-Do not perform step 7 from source availability alone. Confirm the public
-webhook health check, a signed GitHub delivery in the spool, successful Cloud
-dispatch, and a reconciled canary receipt first. Until then the target's
-existing Issue trigger remains the recovery path.
+## 5. First canary
 
-Steps 6 and 7 are intentionally separate. The Cloud runtime installer replaces
-vendored execution files; the central controller receives GitHub events and
-uses App-authored comments/checks as the return channel. Deleting the existing
-workflow before the controller service is listening would silently disable
-Issue intake.
+1. Open a trusted test Issue or apply the configured `agent:run` label.
+2. Confirm Actions creates one draft PR and one canonical Issue comment.
+3. On the draft PR, a connected human copies the documented `@codex` command.
+4. Confirm the Cloud task starts at the bootstrap head, removes the transient
+   request manifest, creates exactly one implementation commit, and pushes it.
+5. Accept success only when the remote branch SHA, live PR head, canonical
+   comments, and all configured checks agree.
 
-## End state
-
-The end state is a protected `.github/prarness.yml` plus a secret-free CI/CD
-workflow (or an existing repository workflow selected by that config). GitHub
-App webhooks replace the target Issue controller. Central PRarness is the only
-source for prompts, schemas, authentication, publication, reconciliation, and
-runtime contract versions.
+After the canary, remove copied `.github/agent-pipeline/**`, copied prompts,
+schemas, tests, and central policy from the target. The thin adapter files above
+are the intended steady state.

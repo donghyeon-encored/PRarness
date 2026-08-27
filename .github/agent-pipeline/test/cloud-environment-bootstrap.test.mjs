@@ -20,6 +20,8 @@ test("Cloud environment bootstrap verifies and installs the pinned runtime bundl
   const repositoryCheck = join(directory, "repository-check.mjs");
   const githubOperations = join(directory, "cloud-github.mjs");
   const publisher = join(directory, "cloud-publish.mjs");
+  const session = join(directory, "cloud-session.mjs");
+  const sessionPrompt = join(directory, "cloud-session.md");
   const manifest = join(directory, "runtime-manifest.json");
   const invocation = join(directory, "invocation.txt");
   const requestedUrl = join(directory, "requested-url.txt");
@@ -30,19 +32,23 @@ printf '%s' "$*" > "$TEST_INVOCATION"
   await writeFile(repositoryCheck, "#!/usr/bin/env node\n");
   await writeFile(githubOperations, "#!/usr/bin/env node\n");
   await writeFile(publisher, "#!/usr/bin/env node\n");
+  await writeFile(session, "#!/usr/bin/env node\n");
+  await writeFile(sessionPrompt, "Run the one-session contract.\n");
   const entries = [
-    ["cloud-github-setup.sh", source],
-    ["repository-check.mjs", repositoryCheck],
-    ["cloud-github.mjs", githubOperations],
-    ["cloud-publish.mjs", publisher],
+    ["cloud-github-setup.sh", source, true],
+    ["repository-check.mjs", repositoryCheck, true],
+    ["cloud-github.mjs", githubOperations, true],
+    ["cloud-publish.mjs", publisher, true],
+    ["cloud-session.mjs", session, true],
+    ["prompts/cloud-session.md", sessionPrompt, false],
   ];
   await writeFile(manifest, JSON.stringify({
     version: 1,
     runtime_contract: 1,
-    files: await Promise.all(entries.map(async ([path, file]) => ({
+    files: await Promise.all(entries.map(async ([path, file, executable]) => ({
       path,
       sha256: createHash("sha256").update(await readFile(file)).digest("hex"),
-      executable: true,
+      executable,
     }))),
   }));
   await writeFile(join(bin, "curl"), `#!/usr/bin/env bash
@@ -62,6 +68,8 @@ case "$url" in
   */repository-check.mjs) cp "$TEST_CHECK_SOURCE" "$output" ;;
   */cloud-github.mjs) cp "$TEST_GITHUB_SOURCE" "$output" ;;
   */cloud-publish.mjs) cp "$TEST_PUBLISH_SOURCE" "$output" ;;
+  */cloud-session.mjs) cp "$TEST_SESSION_SOURCE" "$output" ;;
+  */prompts/cloud-session.md) cp "$TEST_SESSION_PROMPT_SOURCE" "$output" ;;
   *) exit 90 ;;
 esac
 `);
@@ -81,6 +89,8 @@ esac
       TEST_CHECK_SOURCE: repositoryCheck,
       TEST_GITHUB_SOURCE: githubOperations,
       TEST_PUBLISH_SOURCE: publisher,
+      TEST_SESSION_SOURCE: session,
+      TEST_SESSION_PROMPT_SOURCE: sessionPrompt,
     },
   });
 
@@ -93,6 +103,7 @@ esac
   assert.equal((await stat(join(home, ".local/bin/prarness-repository-check"))).mode & 0o777, 0o700);
   assert.equal((await stat(join(home, ".local/bin/prarness-github"))).mode & 0o777, 0o700);
   assert.equal((await stat(join(home, ".local/bin/prarness-publish"))).mode & 0o777, 0o700);
+  assert.equal((await stat(join(home, ".local/bin/prarness-session"))).mode & 0o777, 0o700);
 });
 
 test("Cloud environment bootstrap rejects mutable or abbreviated refs", async () => {
@@ -107,7 +118,7 @@ test("committed runtime manifest covers required commands and has exact hashes",
   assert.equal(manifest.version, 1);
   assert.equal(manifest.runtime_contract, 1);
   const entries = new Map(manifest.files.map((entry) => [entry.path, entry]));
-  for (const required of ["cloud-github-setup.sh", "repository-check.mjs", "cloud-github.mjs", "cloud-publish.mjs", "pipeline.mjs"]) {
+  for (const required of ["cloud-github-setup.sh", "repository-check.mjs", "cloud-github.mjs", "cloud-publish.mjs", "cloud-session.mjs", "prompts/cloud-session.md", "pipeline.mjs"]) {
     assert.equal(entries.has(required), true, `missing runtime entry: ${required}`);
   }
   for (const [relativePath, entry] of entries) {

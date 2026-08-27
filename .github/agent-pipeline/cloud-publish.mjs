@@ -63,7 +63,6 @@ function readRequest(filePath) {
   requireCondition(Number.isInteger(value.iteration) && value.iteration > 0, "INVALID_PUBLISH_REQUEST", "Invalid implementation iteration");
   requireCondition(value.stage === "implement", "INVALID_PUBLISH_REQUEST", "Only an implement request may publish code");
   requireCondition(/^[0-9a-f]{40}$/.test(value.source_sha ?? "") && /^[0-9a-f]{40}$/.test(value.subject_sha ?? ""), "INVALID_PUBLISH_REQUEST", "Request SHAs must be full lowercase Git SHAs");
-  requireCondition(value.subject_sha === value.source_sha, "INVALID_PUBLISH_REQUEST", "Initial implementation subject_sha must equal source_sha");
   requireCondition(typeof value.branch === "string" && value.branch.startsWith(`agent/issue-${value.issue}-`) && !value.branch.includes("..") && !/\s/.test(value.branch), "UNSAFE_BRANCH", "Managed branch does not match the source Issue");
   requireCondition(Array.isArray(value.allowed_paths) && value.allowed_paths.length > 0 && value.allowed_paths.every((filePath) => typeof filePath === "string" && filePath && !filePath.startsWith("/") && !filePath.includes("..") && !filePath.includes("\\") && !filePath.includes("\0")), "INVALID_ALLOWED_PATHS", "allowed_paths must contain safe repository-relative paths");
   requireCondition(new Set(value.allowed_paths).size === value.allowed_paths.length, "INVALID_ALLOWED_PATHS", "allowed_paths must be unique");
@@ -137,12 +136,16 @@ export async function publishCloudRequest(options = {}) {
   const head = git(repo, ["rev-parse", "HEAD"]).trim();
   requireCondition(/^[0-9a-f]{40}$/.test(head), "MISSING_COMMIT", "No publishable commit exists");
   try {
-    execFileSync("git", ["merge-base", "--is-ancestor", request.source_sha, head], { cwd: repo, stdio: "ignore" });
+    execFileSync("git", ["merge-base", "--is-ancestor", request.source_sha, request.subject_sha], { cwd: repo, stdio: "ignore" });
+    execFileSync("git", ["merge-base", "--is-ancestor", request.subject_sha, head], { cwd: repo, stdio: "ignore" });
   } catch {
-    throw new CloudPublishError("SOURCE_SHA_MISMATCH", "The requested source SHA is not an ancestor of HEAD");
+    throw new CloudPublishError("SOURCE_SHA_MISMATCH", "The source, starting branch head, and implementation HEAD are not a fast-forward chain");
   }
-  const commitCount = Number(git(repo, ["rev-list", "--count", `${request.source_sha}..${head}`]).trim());
-  requireCondition(commitCount === 1, "INVALID_COMMIT_COUNT", "One implementation task must publish exactly one commit");
+  const commitCount = Number(git(repo, ["rev-list", "--count", `${request.subject_sha}..${head}`]).trim());
+  requireCondition(commitCount === 1, "INVALID_COMMIT_COUNT", "One Cloud session must append exactly one implementation commit to its starting branch head");
+  const commitMessage = git(repo, ["log", "-1", "--format=%B", head]);
+  requireCondition(new RegExp(`^Refs #${request.issue}$`, "m").test(commitMessage), "INVALID_COMMIT_TRAILER", "Implementation commit must contain the source Issue trailer");
+  requireCondition(new RegExp(`^Agent-Iteration: ${request.iteration}$`, "m").test(commitMessage), "INVALID_COMMIT_TRAILER", "Implementation commit must contain the current Agent-Iteration trailer");
   const actualPaths = changedPaths(repo, request.source_sha);
   requireCondition(actualPaths.length > 0, "EMPTY_IMPLEMENTATION", "Implementation commit has no changed paths");
   const undeclared = actualPaths.filter((filePath) => !request.allowed_paths.includes(filePath));
@@ -154,6 +157,9 @@ export async function publishCloudRequest(options = {}) {
   requireCondition(lineCount <= 400, "CHANGE_SCOPE_FAILED", `Implementation changes ${lineCount} lines; maximum is 400`);
   const validations = readValidation(options.validation, request, compatibility.validation_commands);
   requireCondition(git(repo, ["status", "--porcelain=v1", "-z"]).length === 0, "DIRTY_WORKTREE", "Publication requires a clean worktree after validation and commit");
+
+  const startingRemoteSha = remoteBranchSha(repo, request.branch);
+  requireCondition(startingRemoteSha === request.subject_sha, "STALE_REMOTE_BRANCH", "Remote managed branch moved after the Cloud session started");
 
   await preflightGitHubCapabilities(request.repository, { ...options, repo });
   const { client } = createCloudGitHubClient(request.repository, options);

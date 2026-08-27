@@ -1448,43 +1448,6 @@ test("CLI writes normalized JSON to --output", () => {
   assert.equal(JSON.parse(readFileSync(output, "utf8")).verdict, "pass");
 });
 
-test("controller builds a stage and SHA-bound Cloud request", () => {
-  const directory = mkdtempSync(join(tmpdir(), "pipeline-cloud-request-"));
-  const prompt = join(directory, "prompt.md");
-  const schema = join(directory, "schema.json");
-  const context = join(directory, "context.json");
-  const output = join(directory, "request.json");
-  writeFileSync(prompt, "Return the triage payload.");
-  writeFileSync(schema, JSON.stringify({ type: "object" }));
-  writeFileSync(context, JSON.stringify({ issue: { number: 1 }, state: {} }));
-  execFileSync(process.execPath, [pipelinePath, "build-cloud-request", "--stage", "triage",
-    "--team", fileURLToPath(new URL("../team.yaml", import.meta.url)),
-    "--request-id", "gh-12345678-triage", "--repository", "owner/repo", "--environment", "env_12345678",
-    "--cli-version", "0.145.0", "--source-sha", "a".repeat(40), "--subject-sha", "a".repeat(40),
-    "--prompt", prompt, "--schema", schema, "--context", context, "--output", output]);
-  const request = JSON.parse(readFileSync(output, "utf8"));
-  assert.equal(request.result_path, ".agent-cloud-output/gh-12345678-triage/triage.json");
-  assert.deepEqual(Object.keys(request.context).sort(), ["issue", "state"]);
-  assert.match(request.instructions, /Trusted deterministic policy projection/);
-  assert.match(request.instructions, /npm run lint/);
-  assert.match(request.instructions, /platform-maintainer/);
-
-  const implementOutput = join(directory, "implement-request.json");
-  const allowedPaths = join(directory, "allowed-paths.json");
-  writeFileSync(context, JSON.stringify({ issue: { number: 1 }, state: { branch: "agent/issue-1-fix", iteration: 2 }, plan: {} }));
-  writeFileSync(allowedPaths, JSON.stringify({ changed_paths: ["src/fix.mjs"] }));
-  execFileSync(process.execPath, [pipelinePath, "build-cloud-request", "--stage", "implement",
-    "--team", fileURLToPath(new URL("../team.yaml", import.meta.url)),
-    "--request-id", "gh-12345678-implement", "--repository", "owner/repo", "--environment", "env_12345678",
-    "--cli-version", "0.145.0", "--source-sha", "a".repeat(40), "--subject-sha", "a".repeat(40),
-    "--prompt", prompt, "--schema", schema, "--context", context, "--allowed-paths", allowedPaths, "--output", implementOutput]);
-  const implementation = JSON.parse(readFileSync(implementOutput, "utf8"));
-  assert.equal(implementation.publication_request.issue, 1);
-  assert.equal(implementation.publication_request.iteration, 2);
-  assert.equal(implementation.publication_request.branch, "agent/issue-1-fix");
-  assert.deepEqual(implementation.publication_request.allowed_paths, ["src/fix.mjs"]);
-});
-
 test("Cloud policy projection contains routing and review policy but no runtime credentials", () => {
   const projection = cloudPolicyProjection(team);
   assert.equal(projection.pipeline.bootstrap_agent, "codex");

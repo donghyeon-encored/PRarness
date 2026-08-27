@@ -13,7 +13,6 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { basename, dirname, extname, join, normalize, posix, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { validateCloudRequest } from "./cloud-bridge.mjs";
 
 const PIPELINE_VERSION = 1;
 const STATE_MARKER = "issue-review-state:v1";
@@ -3203,10 +3202,6 @@ Usage: node pipeline.mjs <command> [options]
 Read-only policy/data commands (JSON stdout; all accept --output FILE):
   validate-team       --team FILE
   validation-commands --team FILE
-  build-cloud-request --stage NAME --request-id ID --repository OWNER/REPO
-                      --environment ID --cli-version VERSION --source-sha SHA
-                      --subject-sha SHA --prompt FILE --schema FILE --context FILE
-                      [--allowed-paths FILE]
   gate-event          --event FILE [--event-name NAME] [--team FILE]
                       [--enriched-output FILE]
   route-agent         --team FILE [--assignee LOGIN | --triage FILE]
@@ -3260,50 +3255,6 @@ export async function runCli(argv = process.argv.slice(2)) {
     return emit(asArray(team.pipeline?.validation_commands).map(String), args, {
       githubValue: { commands_json: asArray(team.pipeline?.validation_commands).map(String) },
     });
-  }
-  if (command === "build-cloud-request") {
-    const stage = requiredArg(args, "stage");
-    const requestId = requiredArg(args, "request_id");
-    const prompt = rawInput(requiredArg(args, "prompt"), "--prompt");
-    const policy = cloudPolicyProjection(loadTeam(teamPath));
-    const context = readJsonish(requiredArg(args, "context"), "--context");
-    const allowedPaths = args.allowed_paths ? readPaths(args.allowed_paths) : [];
-    const request = {
-      version: 1,
-      request_id: requestId,
-      stage,
-      source_sha: requiredArg(args, "source_sha"),
-      subject_sha: requiredArg(args, "subject_sha"),
-      repository: requiredArg(args, "repository"),
-      environment_id: requiredArg(args, "environment"),
-      attempts: 1,
-      expected_cli_version: requiredArg(args, "cli_version"),
-      result_path: `.agent-cloud-output/${requestId}/${stage}.json`,
-      allowed_paths: allowedPaths,
-      instructions: `${prompt}\n\n## Trusted deterministic policy projection\n\n${JSON.stringify(policy)}`,
-      context,
-      payload_schema: readJsonish(requiredArg(args, "schema"), "--schema"),
-    };
-    if (stage === "implement") {
-      const issue = asInteger(context.issue?.number, 0);
-      const iteration = asInteger(context.state?.iteration ?? context.plan?.iteration, 0);
-      const branch = String(context.state?.branch ?? context.plan?.branch ?? "");
-      invariant(issue > 0 && iteration > 0 && branch.startsWith(`agent/issue-${issue}-`), "Implementation context must contain its source Issue, iteration, and managed branch", "INVALID_PUBLICATION_REQUEST");
-      request.publication_request = {
-        version: 1,
-        runtime_contract: 1,
-        request_id: requestId,
-        repository: request.repository,
-        issue,
-        iteration,
-        stage: "implement",
-        source_sha: request.source_sha,
-        subject_sha: request.subject_sha,
-        branch,
-        allowed_paths: allowedPaths,
-      };
-    }
-    return emit(validateCloudRequest(request), args);
   }
   if (command === "gate-event" || command === "gate") {
     const team = loadTeam(teamPath);

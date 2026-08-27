@@ -1,19 +1,32 @@
 # PRarness
 
-PRarness is the reusable core of a deterministic issue-to-pull-request agent
-pipeline. It contains the controller, prompts, schemas, tests, workflow, and
-repository policy needed to triage an issue, plan and implement a bounded
-change, review the exact pull-request head, and hand the result to a human.
+PRarness is a reusable Issue-to-draft-PR harness for Codex Cloud. It does not
+require an always-on relay, a self-hosted runner, or an OpenAI API key.
 
-This repository intentionally contains no mock product. The runnable recipe
-scaler used for end-to-end experiments lives in a separate `PRarness-demo`
-repository. Target repositories opt in with a small repository-specific
-configuration; Codex Cloud installs a reviewed, checksum-verified PRarness
-runtime temporarily instead of committing a copy of this core into the target.
+The supported hostless flow is deliberately explicit:
+
+1. GitHub Actions accepts an Issue and creates one managed `agent/issue-*`
+   branch plus a draft bootstrap PR.
+2. A connected human writes the documented `@codex` command on that PR. This
+   is the supported ChatGPT-authenticated Cloud dispatch boundary.
+3. One Codex Cloud task runs the pinned central runtime, analyzes, plans,
+   implements, reviews, validates, commits, pushes, and updates GitHub.
+4. Secret-free GitHub Actions CI independently validates the resulting PR.
+
+GitHub is the durable queue and result store. Automation never pretends that a
+bot-authored mention started Codex Cloud, and no external process is required
+to remember intermediate model stages.
+
+Target repositories keep only a thin adapter: `.github/prarness.yml`, a small
+Issue intake workflow, and a CI workflow when they do not already have one.
+They do not copy `.github/agent-pipeline/**`, prompts, schemas, or central
+policy. The Cloud environment downloads a reviewed full commit SHA into
+`$HOME/.local/share/prarness/<sha>/`, verifies every file checksum, and exposes
+repository-independent commands under `$HOME/.local/bin`.
 
 ## Validate the core
 
-Requirements: Node.js 20 or newer.
+Node.js 20 or newer is required.
 
 ```bash
 npm ci --ignore-scripts
@@ -21,70 +34,33 @@ npm run lint
 npm test
 ```
 
-## Repository map
+## Important files
 
 ```text
-.github/agent-pipeline/pipeline.mjs  deterministic controller and GitHub helpers
-.github/agent-pipeline/cloud-bridge.mjs  Codex Cloud relay contract
-.github/agent-pipeline/cloud-environment-bootstrap.sh  reusable Cloud installer
-.github/agent-pipeline/cloud-github-setup.sh  generic Cloud remote/gh bootstrap
-.github/agent-pipeline/repository-check.mjs  target opt-in/policy compatibility gate
-.github/agent-pipeline/cloud-github.mjs  verified Issue/comment/CI/deployment/reconcile operations
-.github/agent-pipeline/cloud-publish.mjs  SHA-bound Cloud branch/PR publisher
-.github/agent-pipeline/github-app-controller.mjs  signed webhook ingress and idempotent dispatch spool
-.github/agent-pipeline/controller-dispatch.mjs  private repo mapping to ChatGPT-authenticated Cloud submit
-.github/agent-pipeline/runtime-manifest.json  immutable runtime file checksums
-.github/agent-pipeline/prompts/      model stage contracts
-.github/agent-pipeline/schemas/      structured-output and state schemas
-.github/agent-pipeline/test/         policy and controller regression tests
-.github/agent-pipeline/team.yaml     ownership and risk policy
-.github/prarness.yml                 this repository's target adapter contract
-.github/workflows/issue-review.yml   trusted default-branch controller
-.github/workflows/pr-validation.yml  secret-free pull-request validation
-.github/workflows/reusable-validation.yml  secret-free target CI entry point
-docs/git-ground-rules.md             authoritative repository policy
+.github/agent-pipeline/hostless-intake.mjs       Issue → bootstrap draft PR
+.github/agent-pipeline/cloud-environment-bootstrap.sh
+.github/agent-pipeline/cloud-github-setup.sh     remote and GitHub App auth setup
+.github/agent-pipeline/cloud-session.mjs         one-session prepare/validate/publish
+.github/agent-pipeline/cloud-github.mjs          verified Issue/comment/CI/deploy ops
+.github/agent-pipeline/cloud-publish.mjs         SHA-bound commit/branch/PR publisher
+.github/agent-pipeline/runtime-manifest.json     pinned runtime checksums
+.github/workflows/issue-review.yml               thin repository intake caller
+.github/workflows/reusable-intake.yml            central hostless intake workflow
+.github/workflows/reusable-validation.yml        secret-free reusable CI
+.github/prarness.yml                             repository-specific opt-in
+docs/git-ground-rules.md                         authoritative behavior policy
+docs/codex-cloud-migration.md                    Cloud environment runbook
+docs/target-adoption.md                          cross-repository adapter guide
 ```
 
-## Enable the control plane
+The GitHub App installation used by Cloud needs Contents, Issues, Pull
+requests, Actions, Checks, and Deployments write permissions. Credentials live
+only in the Codex Cloud environment setup/maintenance phase; target Actions use
+their scoped `GITHUB_TOKEN` only for deterministic intake and no target secret.
 
-Install one GitHub App on every managed repository. Its ordinary runtime
-permissions are Contents, Issues, Pull requests, Actions, Checks, and
-Deployments write; Workflows write is added only to the separately authorized
-adapter/workflow maintenance path. Keep the App private key and webhook secret
-in the central controller/Cloud environment, never in a target repository.
-
-Run `github-app-controller.mjs serve` behind HTTPS to verify GitHub webhook
-signatures and queue Issue, canonical comment, managed PR, check, and workflow
-events exactly once. Its `drain` command hands those normalized jobs to the
-ChatGPT-authenticated Codex Cloud relay. GitHub is the durable result channel:
-the next event is accepted only after the App-authored comment, live PR head,
-and required check state exist on GitHub. There is no target Actions secret or
-`AGENT_APP_ID`/`CODEX_CLOUD_ENV_ID` repository variable in this path.
-
-Configure each target Cloud environment with the SHA-pinned installer from the
-Cloud runbook. It installs the central runtime outside the checkout, repairs
-`origin`, configures non-interactive App authentication, records the App and
-installation identity, and proves every required write capability. The
-publisher verifies the live branch, draft PR, canonical Issue/PR comments, and
-all configured CI checks before emitting `verified: true`. Expiring credentials
-produce `TOKEN_REFRESH_REQUIRED`; the idempotent controller then starts a fresh
-continuation instead of reporting a partial success. See [the Cloud relay
-runbook](docs/codex-cloud-migration.md) and [the target adoption
-guide](docs/target-adoption.md).
-
-Never commit an App private key, API key, `.env` file, local `.npmrc`, or runner
-artifact. See [the publication checklist](docs/publication-checklist.md),
-[`.gitignore`](.gitignore), and
-[`docs/git-ground-rules.md`](docs/git-ground-rules.md) for the publication and
-trust-boundary rules.
-
-Automated Issue work uses `agent/issue-*` branches. Codex Cloud is expected to
-update the Issue, comments, branch, commits, and draft PR directly with the
-authenticated `gh` CLI. An explicit request in an interactive Codex task may
-publish maintenance changes without first creating a synthetic Issue. The
-default is a `codex/maintenance-*` draft PR; an explicit instruction to publish
-to the default branch permits one validated fast-forward commit. Force-push and
-self-approval/self-merge remain forbidden.
+Automated work never force-pushes, merges, or self-approves. Interactive
+maintenance follows the separate publication rules in
+[`docs/git-ground-rules.md`](docs/git-ground-rules.md).
 
 ## License
 

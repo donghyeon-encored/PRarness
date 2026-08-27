@@ -1,0 +1,71 @@
+name: PRarness hostless intake
+
+on:
+  workflow_call:
+    inputs:
+      runtime_ref:
+        description: Reviewed full PRarness commit SHA
+        required: true
+        type: string
+      runtime_repository:
+        description: Repository containing the central PRarness runtime
+        required: false
+        default: donghyeon-encored/PRarness
+        type: string
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  intake:
+    name: Prepare managed draft PR
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out target repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Check out reviewed PRarness runtime
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: ${{ inputs.runtime_repository }}
+          ref: ${{ inputs.runtime_ref }}
+          path: .prarness-runtime
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Set up runtime Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "20"
+
+      - name: Prepare or recover the hostless Cloud queue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRARNESS_RESULT: ${{ runner.temp }}/prarness-intake-result.json
+        run: >-
+          node .prarness-runtime/.github/agent-pipeline/hostless-intake.mjs
+          --repository "$GITHUB_REPOSITORY"
+          --runtime-ref "${{ inputs.runtime_ref }}"
+          --event "$GITHUB_EVENT_PATH"
+          --event-name "$GITHUB_EVENT_NAME"
+          --repo "$GITHUB_WORKSPACE"
+          --result "$PRARNESS_RESULT"
+
+      - name: Publish intake summary
+        if: always()
+        env:
+          PRARNESS_RESULT: ${{ runner.temp }}/prarness-intake-result.json
+        run: |
+          echo '## PRarness hostless intake' >> "$GITHUB_STEP_SUMMARY"
+          echo '' >> "$GITHUB_STEP_SUMMARY"
+          if [[ ! -f "$PRARNESS_RESULT" ]]; then
+            echo '- Intake failed before producing a result.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          jq -r '"- Operation: `\(.operation)`\n- Issue: #\(.issue // "n/a")\n- Draft PR: \(.pr_url // "not created")\n- Human Cloud dispatch required: \(.requires_human_dispatch // false)"' \
+            "$PRARNESS_RESULT" >> "$GITHUB_STEP_SUMMARY"

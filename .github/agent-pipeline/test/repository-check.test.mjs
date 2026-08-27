@@ -12,7 +12,9 @@ const exec = promisify(execFile);
 function validConfig() {
   return {
     version: 1,
+    repository: "owner/repo",
     runtime: { contract: 1 },
+    dispatch: { mode: "human_pr_mention", label: "agent:run", auto_on_open_for_trusted: true },
     publication: { mode: "codex_cloud_direct", branch_prefix: "agent/issue-" },
     ownership: { source: "codeowners", fallback: "maintainer" },
     validation: { commands: ["npm test"] },
@@ -58,6 +60,7 @@ test("repository config opts into scoped Cloud publication", () => {
   const result = validateRepositoryConfig(validConfig());
   assert.equal(result.publication_mode, "codex_cloud_direct");
   assert.equal(result.branch_prefix, "agent/issue-");
+  assert.equal(result.dispatch.mode, "human_pr_mention");
   assert.deepEqual(result.validation_commands, ["npm test"]);
 });
 
@@ -84,5 +87,32 @@ test("repository compatibility refuses missing explicit opt-in", async () => {
   assert.throws(
     () => checkRepositoryCompatibility({ repo, repository: "owner/repo" }),
     (error) => error.code === "MISSING_PRARNESS_CONFIG",
+  );
+});
+
+test("repository compatibility rejects an adapter copied to another repository", async () => {
+  const repo = await repository();
+  await writeFile(join(repo, ".github/prarness.yml"), `version: 1
+repository: another/repository
+runtime:
+  contract: 1
+publication:
+  mode: codex_cloud_direct
+  branch_prefix: agent/issue-
+validation:
+  commands:
+    - npm test
+ci:
+  required: true
+  trigger: pull_request
+  workflow: ci.yml
+  app_slug: github-actions
+  required_checks:
+    - Test
+  timeout_seconds: 300
+`);
+  assert.throws(
+    () => checkRepositoryCompatibility({ repo, repository: "owner/repo" }),
+    (error) => error.code === "REPOSITORY_CONFIG_MISMATCH",
   );
 });

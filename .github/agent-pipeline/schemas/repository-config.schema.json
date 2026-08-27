@@ -5,11 +5,22 @@
   "required": ["version", "runtime", "publication", "validation", "ci"],
   "properties": {
     "version": { "const": 1 },
+    "repository": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$" },
     "runtime": {
       "type": "object",
       "additionalProperties": false,
       "required": ["contract"],
       "properties": { "contract": { "const": 1 } }
+    },
+    "dispatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "label", "auto_on_open_for_trusted"],
+      "properties": {
+        "mode": { "const": "human_pr_mention" },
+        "label": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,49}$" },
+        "auto_on_open_for_trusted": { "type": "boolean" }
+      }
     },
     "publication": {
       "type": "object",

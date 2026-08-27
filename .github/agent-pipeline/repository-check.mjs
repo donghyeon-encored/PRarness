@@ -43,11 +43,23 @@ function safeWorkflowName(value) {
 }
 
 export function validateRepositoryConfig(config) {
-  exactKeys(config, ["version", "runtime", "publication", "ownership", "validation", "ci", "protected_paths"], "config");
+  exactKeys(config, ["version", "repository", "runtime", "dispatch", "publication", "ownership", "validation", "ci", "protected_paths"], "config");
   requireCondition(config.version === 1, "INVALID_PRARNESS_CONFIG", "config.version must be 1");
+
+  if (config.repository !== undefined) {
+    requireCondition(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(config.repository), "INVALID_PRARNESS_CONFIG", "repository must use owner/repository format");
+  }
 
   exactKeys(config.runtime, ["contract"], "runtime");
   requireCondition(config.runtime.contract === 1, "RUNTIME_CONTRACT_MISMATCH", "runtime.contract must be 1");
+
+  if (config.dispatch !== undefined) {
+    exactKeys(config.dispatch, ["mode", "label", "auto_on_open_for_trusted"], "dispatch");
+    requireCondition(config.dispatch.mode === "human_pr_mention", "INVALID_PRARNESS_CONFIG", "dispatch.mode must be human_pr_mention");
+    requireCondition(typeof config.dispatch.label === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,49}$/.test(config.dispatch.label),
+      "INVALID_PRARNESS_CONFIG", "dispatch.label must be a safe GitHub label");
+    requireCondition(typeof config.dispatch.auto_on_open_for_trusted === "boolean", "INVALID_PRARNESS_CONFIG", "dispatch.auto_on_open_for_trusted must be boolean");
+  }
 
   exactKeys(config.publication, ["mode", "branch_prefix"], "publication");
   requireCondition(config.publication.mode === "codex_cloud_direct", "PUBLICATION_NOT_OPTED_IN", "publication.mode must be codex_cloud_direct");
@@ -84,7 +96,13 @@ export function validateRepositoryConfig(config) {
 
   return {
     version: 1,
+    repository: config.repository ?? null,
     runtime_contract: 1,
+    dispatch: config.dispatch ?? {
+      mode: "human_pr_mention",
+      label: "agent:run",
+      auto_on_open_for_trusted: false,
+    },
     publication_mode: config.publication.mode,
     branch_prefix: branchPrefix,
     validation_commands: [...config.validation.commands],
@@ -129,6 +147,8 @@ export function checkRepositoryCompatibility(options = {}) {
     throw new RepositoryCompatibilityError("MISSING_PRARNESS_CONFIG", `Repository must opt in through ${configPath}`);
   }
   const config = validateRepositoryConfig(parseYaml(source));
+  requireCondition(config.repository === null || config.repository === repository, "REPOSITORY_CONFIG_MISMATCH",
+    `Configured repository ${config.repository} does not match ${repository}`);
   const conflicts = findLegacyPublicationPolicies(repo);
   requireCondition(conflicts.length === 0, "LEGACY_PUBLICATION_POLICY", `Legacy or conflicting publication policy found in: ${conflicts.join(", ")}`);
   return { compatible: true, repository, config_path: configPath, ...config };

@@ -83,5 +83,6 @@ ln -sfn "${version_dir}/cloud-github-setup.sh" "${install_dir}/prarness-github-s
 ln -sfn "${version_dir}/repository-check.mjs" "${install_dir}/prarness-repository-check"
 ln -sfn "${version_dir}/cloud-github.mjs" "${install_dir}/prarness-github"
 ln -sfn "${version_dir}/cloud-publish.mjs" "${install_dir}/prarness-publish"
+ln -sfn "${version_dir}/cloud-session.mjs" "${install_dir}/prarness-session"
 
 "${install_dir}/prarness-github-setup" "$@"
