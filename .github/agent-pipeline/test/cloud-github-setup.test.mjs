@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { generateKeyPairSync } from "node:crypto";
-import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -55,6 +55,9 @@ exit 7
 async function installFakeCurl(context) {
   await writeFile(join(context.bin, "curl"), `#!/usr/bin/env bash
 url=\${!#}
+if [[ -n \${TEST_CURL_LOG:-} ]]; then
+  printf '%s\\n' "$url" >> "$TEST_CURL_LOG"
+fi
 if [[ $url == *"/app/installations?per_page="* ]]; then
   printf '%s' "\${TEST_INSTALLATIONS_JSON}"
   exit 0
@@ -156,6 +159,57 @@ test("Cloud setup discovers a remote-less checkout from GitHub App installations
   context.env.TEST_MATCH_REPOSITORIES = "owner/target";
   await exec("bash", [setup], { cwd: context.repo, env: context.env });
   await assertConfigured(context, "owner/target", "github_app_write_token");
+});
+
+test("Cloud setup normalizes a quoted GitHub App PEM with escaped newlines", async () => {
+  const context = await harness("owner/target");
+  await installFakeCurl(context);
+  delete context.env.CODEX_GITHUB_TOKEN;
+  context.env.AGENT_APP_ID = "42";
+  context.env.AGENT_APP_PRIVATE_KEY = `"${appPrivateKey().replaceAll("\n", "\\n")}"`;
+  context.env.TEST_HEAD = context.head;
+  context.env.TEST_INSTALLATIONS_JSON = JSON.stringify([{ id: 123 }]);
+  context.env.TEST_INSTALLATION_REPOSITORIES_JSON = JSON.stringify({ repositories: [
+    { full_name: "owner/target" },
+  ] });
+  context.env.TEST_MATCH_REPOSITORIES = "owner/target";
+  await exec("bash", [setup], { cwd: context.repo, env: context.env });
+  await assertConfigured(context, "owner/target", "github_app_write_token");
+});
+
+test("Cloud setup accepts an explicitly base64-encoded GitHub App PEM", async () => {
+  const context = await harness("owner/target");
+  await installFakeCurl(context);
+  delete context.env.CODEX_GITHUB_TOKEN;
+  context.env.AGENT_APP_ID = "42";
+  context.env.AGENT_APP_PRIVATE_KEY = `base64:${Buffer.from(appPrivateKey()).toString("base64")}`;
+  context.env.TEST_HEAD = context.head;
+  context.env.TEST_INSTALLATIONS_JSON = JSON.stringify([{ id: 123 }]);
+  context.env.TEST_INSTALLATION_REPOSITORIES_JSON = JSON.stringify({ repositories: [
+    { full_name: "owner/target" },
+  ] });
+  context.env.TEST_MATCH_REPOSITORIES = "owner/target";
+  await exec("bash", [setup], { cwd: context.repo, env: context.env });
+  await assertConfigured(context, "owner/target", "github_app_write_token");
+});
+
+test("Cloud setup rejects an invalid GitHub App private key before any API request", async () => {
+  const context = await harness("owner/target");
+  await installFakeCurl(context);
+  delete context.env.CODEX_GITHUB_TOKEN;
+  context.env.AGENT_APP_ID = "42";
+  context.env.AGENT_APP_PRIVATE_KEY = "definitely-not-a-private-key";
+  context.env.TEST_CURL_LOG = join(context.repo, "curl.log");
+  await assert.rejects(
+    exec("bash", [setup], { cwd: context.repo, env: context.env }),
+    (error) => {
+      assert.equal(error.code, 2);
+      assert.match(error.stderr, /not a valid RSA PEM private key/);
+      assert.doesNotMatch(error.stderr, /definitely-not-a-private-key|401|Could not read private key/);
+      return true;
+    },
+  );
+  await assert.rejects(access(context.env.TEST_CURL_LOG), (error) => error.code === "ENOENT");
 });
 
 test("Cloud setup fails closed when multiple App repositories contain the checkout HEAD", async () => {

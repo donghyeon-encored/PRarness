@@ -2,6 +2,7 @@
 
 set -euo pipefail
 set +x
+umask 077
 
 mode=configure
 if [[ ${1:-} == "--verify" ]]; then
@@ -79,12 +80,48 @@ require_app_commands() {
   done
 }
 
+write_app_private_key() {
+  local key_file=$1
+  local private_key=${AGENT_APP_PRIVATE_KEY:-}
+  local first_character last_character encoded_key
+
+  private_key=${private_key//$'\r'/}
+  if (( ${#private_key} >= 2 )); then
+    first_character=${private_key:0:1}
+    last_character=${private_key: -1}
+    if [[ ( $first_character == '"' && $last_character == '"' ) ||
+          ( $first_character == "'" && $last_character == "'" ) ]]; then
+      private_key=${private_key:1:${#private_key}-2}
+    fi
+  fi
+
+  if [[ $private_key == base64:* ]]; then
+    encoded_key=${private_key#base64:}
+    if [[ -z $encoded_key ]] ||
+       ! printf '%s' "$encoded_key" | tr -d '[:space:]' | openssl base64 -d -A > "$key_file"; then
+      echo 'AGENT_APP_PRIVATE_KEY base64 decoding failed.' >&2
+      return 2
+    fi
+  else
+    if [[ $private_key != *$'\n'* && $private_key == *'\n'* ]]; then
+      private_key=${private_key//\\r/}
+      private_key=${private_key//\\n/$'\n'}
+    fi
+    printf '%s\n' "$private_key" > "$key_file"
+  fi
+
+  unset private_key encoded_key
+  if ! openssl rsa -in "$key_file" -check -noout >/dev/null 2>&1; then
+    echo 'AGENT_APP_PRIVATE_KEY is not a valid RSA PEM private key. Store the downloaded .pem file contents, including the BEGIN/END lines, instead of a file path; prefix a base64-encoded PEM with base64:.' >&2
+    return 2
+  fi
+}
+
 create_app_jwt() {
   require_app_commands || return $?
 
   local app_id=${AGENT_APP_ID:-}
-  local private_key=${AGENT_APP_PRIVATE_KEY:-}
-  if [[ -z $app_id || -z $private_key ]]; then
+  if [[ -z $app_id || -z ${AGENT_APP_PRIVATE_KEY:-} ]]; then
     return 1
   fi
   if [[ ! $app_id =~ ^[1-9][0-9]*$ ]]; then
@@ -96,7 +133,7 @@ create_app_jwt() {
   key_file=$(mktemp)
   chmod 600 "$key_file"
   trap 'rm -f "${key_file:-}"' RETURN
-  printf '%s\n' "$private_key" > "$key_file"
+  write_app_private_key "$key_file" || return $?
 
   local now issued_at expires_at header payload unsigned signature
   now=$(date +%s)
@@ -105,7 +142,14 @@ create_app_jwt() {
   header=$(printf '%s' '{"alg":"RS256","typ":"JWT"}' | base64url)
   payload=$(printf '{"iat":%s,"exp":%s,"iss":"%s"}' "$issued_at" "$expires_at" "$app_id" | base64url)
   unsigned="$header.$payload"
-  signature=$(printf '%s' "$unsigned" | openssl dgst -sha256 -sign "$key_file" | base64url)
+  if ! signature=$(printf '%s' "$unsigned" | openssl dgst -sha256 -sign "$key_file" | base64url); then
+    echo 'GitHub App JWT signing failed after private-key validation.' >&2
+    return 2
+  fi
+  if [[ -z $signature ]]; then
+    echo 'GitHub App JWT signing produced an empty signature.' >&2
+    return 2
+  fi
   printf '%s.%s' "$unsigned" "$signature"
 
   rm -f "$key_file"

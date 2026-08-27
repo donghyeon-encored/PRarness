@@ -39,7 +39,11 @@ procedure.
   fine-grained token for the Codex Cloud worker.
 - Add `AGENT_APP_ID` as a repository variable.
 - Add `AGENT_APP_PRIVATE_KEY` as a repository secret. Never place its value in
-  this checkout or expose it to the external relay.
+  this checkout or expose it to the external relay. Its value must be the full
+  downloaded PEM contents, including the `BEGIN` and `END` lines, rather than a
+  path to the `.pem` file. When a secret editor cannot retain multiline values,
+  use a base64 encoding of the complete PEM with the literal `base64:` prefix;
+  the bootstrap also accepts literal `\n` separators and matching outer quotes.
 - Keep the ChatGPT-authenticated host outside GitHub Actions. For a public
   repository, do not register that account as a self-hosted runner or copy
   `auth.json` into Actions.

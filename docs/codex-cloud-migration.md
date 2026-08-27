@@ -62,6 +62,15 @@ https://learn.chatgpt.com/docs/cloud.
    discovers a remote-less checkout automatically; set the non-secret
    `CODEX_GITHUB_REPOSITORY=OWNER/REPO` override only when multiple accessible
    repositories contain the same checkout HEAD, as can happen with forks.
+
+   For `AGENT_APP_PRIVATE_KEY`, the preferred secret value is the entire PEM
+   downloaded from the GitHub App settings, including its `BEGIN` and `END`
+   lines. Store the file contents, not a local `.pem` path. The bootstrap also
+   accepts matching outer quotes and literal `\n` line separators for
+   environment-editor compatibility. If multiline secrets cannot be preserved,
+   base64-encode the complete PEM and store it with an explicit `base64:`
+   prefix. The bootstrap validates the RSA key before making any GitHub API
+   request and never logs the value.
 4. Configure both setup and maintenance scripts with this same generic loader,
    replacing `REVIEWED_PRARNESS_COMMIT_SHA` with a reviewed 40-character
    PRarness commit SHA:
