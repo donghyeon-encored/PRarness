@@ -13,7 +13,7 @@ const setup = fileURLToPath(new URL("../cloud-github-setup.sh", import.meta.url)
 
 async function harness(repository, origin = null) {
   const directory = await mkdtemp(join(tmpdir(), "cloud-github-setup-"));
-  const home = join(directory, "home");
+  const home = join(directory, "home with space");
   const bin = join(directory, "bin");
   const repo = join(directory, "repo");
   await mkdir(home); await mkdir(bin); await mkdir(repo);
@@ -49,7 +49,12 @@ if [[ $1 == repo && $2 == set-default ]]; then
 fi
 if [[ $1 == auth && $2 == git-credential ]]; then
   [[ \${TEST_GIT_CREDENTIAL_COMPLETE:-true} == true ]] || exit 0
-  printf '%s\\n' 'protocol=https' 'host=github.com' "username=\${TEST_GIT_CREDENTIAL_USERNAME:-x-access-token}" 'password=test-credential'
+  credential_password=\${TEST_GIT_CREDENTIAL_PASSWORD:-}
+  if [[ -z $credential_password ]]; then
+    credential_password=$(sed -n 's/^[[:space:]]*oauth_token:[[:space:]]*//p' "$HOME/.config/gh/hosts.yml" | head -1)
+  fi
+  credential_password=\${credential_password:-test-credential}
+  printf '%s\\n' 'protocol=https' 'host=github.com' "username=\${TEST_GIT_CREDENTIAL_USERNAME:-x-access-token}" "password=$credential_password"
   exit 0
 fi
 exit 7
@@ -130,12 +135,20 @@ async function assertConfigured(context, repository, token = "github_pat_test_to
   const hosts = await readFile(join(context.home, ".config/gh/hosts.yml"), "utf8");
   assert.match(hosts, new RegExp(`oauth_token: ${token}`));
   assert.match(hosts, /users:\n\s+x-access-token:\n\s+oauth_token:/);
+  const metadata = JSON.parse(await readFile(join(context.home, ".config/gh/prarness-auth.json"), "utf8"));
+  assert.equal(metadata.repository, repository);
+  assert.match(metadata.credential_fingerprint, /^[0-9a-f]{64}$/);
+  const credentialStore = await readFile(join(context.home, ".config/gh/prarness-git-credentials"), "utf8");
+  assert.match(credentialStore, new RegExp(`^https://x-access-token:${token}@github\\.com$`, "m"));
   const credentialUsername = await exec(context.realGit, [
     "config", "--local", "--get", "credential.https://github.com.username",
   ], { cwd: context.repo });
   assert.equal(credentialUsername.stdout.trim(), "x-access-token");
-  const metadata = JSON.parse(await readFile(join(context.home, ".config/gh/prarness-auth.json"), "utf8"));
-  assert.equal(metadata.repository, repository);
+  const credentialHelpers = await exec(context.realGit, [
+    "config", "--local", "--get-all", "credential.https://github.com.helper",
+  ], { cwd: context.repo });
+  assert.doesNotMatch(credentialHelpers.stdout, /gh auth git-credential/);
+  assert.match(credentialHelpers.stdout, /store --file=/);
 }
 
 test("Cloud setup accepts an explicit repository and persists non-interactive gh authentication", async () => {
@@ -146,7 +159,7 @@ test("Cloud setup accepts an explicit repository and persists non-interactive gh
   await exec("bash", [setup, "--verify", "owner/repo"], { cwd: context.repo, env: context.env });
 });
 
-test("Cloud setup overrides an inherited GitHub HTTPS credential username", async () => {
+test("Cloud setup overrides an inherited username for its dedicated managed credential store", async () => {
   const context = await harness("owner/repo");
   await exec(context.realGit, [
     "config", "--global", "credential.https://github.com.username", "cloud-checkout-user",
@@ -169,12 +182,17 @@ test("Cloud setup preserves the active username for existing GitHub CLI authenti
 
   await exec("bash", [setup, "owner/repo"], { cwd: context.repo, env: context.env });
 
+  const metadata = JSON.parse(await readFile(join(ghConfig, "prarness-auth.json"), "utf8"));
+  assert.equal(metadata.auth_kind, "existing");
+  assert.equal(metadata.credential_fingerprint, null);
   const credentialUsername = await exec(context.realGit, [
     "config", "--local", "--get", "credential.https://github.com.username",
   ], { cwd: context.repo });
   assert.equal(credentialUsername.stdout.trim(), "existing-user");
-  const metadata = JSON.parse(await readFile(join(ghConfig, "prarness-auth.json"), "utf8"));
-  assert.equal(metadata.auth_kind, "existing");
+  const credentialHelpers = await exec(context.realGit, [
+    "config", "--local", "--get-all", "credential.https://github.com.helper",
+  ], { cwd: context.repo });
+  assert.match(credentialHelpers.stdout, /gh auth git-credential/);
 });
 
 test("Cloud setup detects the repository from the environment without an argument", async () => {
@@ -309,12 +327,24 @@ test("Cloud setup fails closed when no repository identity is available", async 
   );
 });
 
-test("Cloud write verification rejects a credential helper that supplies no password", async () => {
+test("Cloud write verification rejects a missing managed credential store", async () => {
   const context = await harness("owner/repo");
-  context.env.TEST_GIT_CREDENTIAL_COMPLETE = "false";
+  await exec("bash", [setup, "owner/repo"], { cwd: context.repo, env: context.env });
+  await writeFile(join(context.home, ".config/gh/prarness-git-credentials"), "");
   await assert.rejects(
-    exec("bash", [setup, "owner/repo"], { cwd: context.repo, env: context.env }),
-    (error) => error.code === 2 && /(?:could not provide|incomplete) GitHub HTTPS credentials/.test(error.stderr),
+    exec("bash", [setup, "--verify-write", "owner/repo"], { cwd: context.repo, env: context.env }),
+    (error) => error.code === 2 && /credential store is missing or empty/.test(error.stderr),
+  );
+});
+
+test("Cloud write verification rejects a managed credential that differs from setup", async () => {
+  const context = await harness("owner/repo");
+  await exec("bash", [setup, "owner/repo"], { cwd: context.repo, env: context.env });
+  const credentialStore = join(context.home, ".config/gh/prarness-git-credentials");
+  await writeFile(credentialStore, "https://x-access-token:different-token@github.com\n", { mode: 0o600 });
+  await assert.rejects(
+    exec("bash", [setup, "--verify-write", "owner/repo"], { cwd: context.repo, env: context.env }),
+    (error) => error.code === 2 && /did not return the managed GitHub credential/.test(error.stderr),
   );
 });
 

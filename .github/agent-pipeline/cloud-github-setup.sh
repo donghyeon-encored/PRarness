@@ -72,6 +72,10 @@ base64url() {
   openssl base64 -A | tr '+/' '-_' | tr -d '='
 }
 
+sha256_text() {
+  openssl dgst -sha256 -r | awk '{print $1}'
+}
+
 require_app_commands() {
   local command_name
   for command_name in curl jq openssl; do
@@ -481,12 +485,14 @@ configure_gh_default_repository() {
 
 config_dir=${GH_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/gh}
 auth_metadata_file="$config_dir/prarness-auth.json"
+credential_store_file="$config_dir/prarness-git-credentials"
 
 if [[ $mode == configure ]]; then
   token=${CODEX_GITHUB_TOKEN:-${GH_TOKEN:-${GITHUB_TOKEN:-}}}
   expires_at=''
   auth_kind=token
   granted_permissions='{}'
+  credential_fingerprint=''
   if [[ -n ${AGENT_APP_ID:-} || -n ${AGENT_APP_PRIVATE_KEY:-} ]]; then
     if [[ -z ${AGENT_APP_ID:-} || -z ${AGENT_APP_PRIVATE_KEY:-} ]]; then
       echo 'GitHub App authentication requires both AGENT_APP_ID and AGENT_APP_PRIVATE_KEY.' >&2
@@ -510,6 +516,7 @@ if [[ $mode == configure ]]; then
   fi
 
   if [[ -n $token ]]; then
+    credential_fingerprint=$(printf '%s' "$token" | sha256_text)
     mkdir -p "$config_dir"
     chmod 700 "$config_dir"
     hosts_file="$config_dir/hosts.yml"
@@ -525,30 +532,56 @@ if [[ $mode == configure ]]; then
       printf '            oauth_token: %s\n' "$token"
     } > "$hosts_tmp"
     mv "$hosts_tmp" "$hosts_file"
+
+    credential_store_tmp=$(mktemp "$config_dir/prarness-git-credentials.XXXXXX")
+    chmod 600 "$credential_store_tmp"
+    if ! printf 'protocol=https\nhost=%s\nusername=x-access-token\npassword=%s\n\n' "$host" "$token" |
+      git credential-store --file "$credential_store_tmp" store; then
+      rm -f "$credential_store_tmp"
+      echo 'Could not persist the managed GitHub HTTPS credential.' >&2
+      exit 2
+    fi
+    chmod 600 "$credential_store_tmp"
+    mv "$credential_store_tmp" "$credential_store_file"
+  else
+    rm -f "$credential_store_file"
   fi
   mkdir -p "$config_dir"
   chmod 700 "$config_dir"
   metadata_tmp=$(mktemp "$config_dir/prarness-auth.json.XXXXXX")
   chmod 600 "$metadata_tmp"
   jq -cn --arg repository "$repository" --arg host "$host" --arg expires_at "$expires_at" \
-    --arg auth_kind "$auth_kind" --argjson permissions "$granted_permissions" \
-    '{version:1,repository:$repository,host:$host,auth_kind:$auth_kind,expires_at:(if $expires_at == "" then null else $expires_at end),permissions:$permissions}' > "$metadata_tmp"
+    --arg auth_kind "$auth_kind" --arg credential_fingerprint "$credential_fingerprint" \
+    --argjson permissions "$granted_permissions" \
+    '{version:1,repository:$repository,host:$host,auth_kind:$auth_kind,expires_at:(if $expires_at == "" then null else $expires_at end),permissions:$permissions,credential_fingerprint:(if $credential_fingerprint == "" then null else $credential_fingerprint end)}' > "$metadata_tmp"
   mv "$metadata_tmp" "$auth_metadata_file"
   unset token GITHUB_TOKEN GH_TOKEN CODEX_GITHUB_TOKEN AGENT_APP_PRIVATE_KEY
 fi
 
+auth_kind=existing
+if [[ -f $auth_metadata_file ]]; then
+  auth_kind=$(jq -r '.auth_kind // "unknown"' "$auth_metadata_file")
+fi
+
 git config --local --unset-all credential."https://${host}".helper >/dev/null 2>&1 || true
 git config --local --add credential."https://${host}".helper ''
-git config --local --add credential."https://${host}".helper '!gh auth git-credential'
-credential_username=x-access-token
-if [[ -f $auth_metadata_file ]] && [[ $(jq -r '.auth_kind // "unknown"' "$auth_metadata_file") == existing ]]; then
+if [[ $auth_kind == github_app || $auth_kind == token ]]; then
+  if [[ ! -s $credential_store_file ]]; then
+    echo 'Managed GitHub HTTPS credential store is missing or empty; rerun Cloud setup or maintenance.' >&2
+    exit 2
+  fi
+  printf -v credential_store_quoted '%q' "$credential_store_file"
+  git config --local --add credential."https://${host}".helper "store --file=${credential_store_quoted}"
+  git config --local credential."https://${host}".username x-access-token
+else
+  git config --local --add credential."https://${host}".helper '!gh auth git-credential'
   credential_username=$(gh api user --jq '.login')
   if [[ ! $credential_username =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,38}$ ]]; then
     echo 'Existing GitHub CLI authentication returned an invalid username.' >&2
     exit 2
   fi
+  git config --local credential."https://${host}".username "$credential_username"
 fi
-git config --local credential."https://${host}".username "$credential_username"
 git config --local user.name "${CODEX_GIT_AUTHOR_NAME:-codex-cloud}"
 git config --local user.email "${CODEX_GIT_AUTHOR_EMAIL:-codex-cloud@users.noreply.github.com}"
 
@@ -564,10 +597,22 @@ if ! printf 'protocol=https\nhost=%s\n\n' "$host" | GIT_TERMINAL_PROMPT=0 git cr
   echo 'Git credential helper could not provide GitHub HTTPS credentials.' >&2
   exit 2
 fi
-grep -Fqx "username=$credential_username" "$credential_file" && grep -Eq '^password=.+$' "$credential_file" || {
+[[ $(grep -Ec '^username=.+$' "$credential_file") == 1 && $(grep -Ec '^password=.+$' "$credential_file") == 1 ]] || {
   echo 'Git credential helper returned incomplete GitHub HTTPS credentials.' >&2
   exit 2
 }
+if [[ -f $auth_metadata_file ]]; then
+  credential_fingerprint=$(jq -r '.credential_fingerprint // empty' "$auth_metadata_file")
+  if [[ -n $credential_fingerprint ]]; then
+    credential_password=$(sed -n 's/^password=//p' "$credential_file")
+    actual_credential_fingerprint=$(printf '%s' "$credential_password" | sha256_text)
+    unset credential_password
+    if [[ $actual_credential_fingerprint != "$credential_fingerprint" ]]; then
+      echo 'Git credential helper did not return the managed GitHub credential.' >&2
+      exit 2
+    fi
+  fi
+fi
 cleanup_credential_file
 trap - EXIT
 
