@@ -637,7 +637,13 @@ if [[ -f $auth_metadata_file ]]; then
   fi
   expires_at=$(jq -r '.expires_at // empty' "$auth_metadata_file")
   if [[ -n $expires_at ]]; then
-    if expires_epoch=$(date -u -d "$expires_at" +%s 2>/dev/null); then
+    if [[ ! $expires_at =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+      echo 'Persisted GitHub credential expiration is invalid.' >&2
+      exit 2
+    fi
+    portable_expires_at=${expires_at/T/ }
+    portable_expires_at=${portable_expires_at%Z}
+    if expires_epoch=$(date -u -d "$portable_expires_at" +%s 2>/dev/null); then
       :
     elif expires_epoch=$(date -j -u -f '%Y-%m-%dT%H:%M:%SZ' "$expires_at" +%s 2>/dev/null); then
       :
