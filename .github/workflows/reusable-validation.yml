@@ -1,0 +1,42 @@
+name: PRarness reusable validation
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: PRarness validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the exact caller revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Load repository validation contract
+        id: contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          ruby -rjson -ryaml -e '
+            config = YAML.safe_load_file(".github/prarness.yml", aliases: false)
+            commands = config.dig("validation", "commands")
+            abort "validation.commands must be a non-empty list" unless commands.is_a?(Array) && !commands.empty?
+            abort "validation command must be a single line" unless commands.all? { |value| value.is_a?(String) && !value.empty? && !value.include?("\n") && !value.include?("\0") }
+            File.write(ENV.fetch("RUNNER_TEMP") + "/prarness-validation.json", JSON.generate(commands))
+          '
+
+      - name: Run target-declared validation without credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r encoded; do
+            command=$(printf '%s' "$encoded" | base64 --decode)
+            printf 'Running validation: %s\n' "$command"
+            bash --noprofile --norc -euo pipefail -c "$command"
+          done < <(jq -r '.[] | @base64' "$RUNNER_TEMP/prarness-validation.json")

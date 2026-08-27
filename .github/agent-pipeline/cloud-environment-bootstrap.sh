@@ -81,6 +81,7 @@ trap - EXIT
 
 ln -sfn "${version_dir}/cloud-github-setup.sh" "${install_dir}/prarness-github-setup"
 ln -sfn "${version_dir}/repository-check.mjs" "${install_dir}/prarness-repository-check"
+ln -sfn "${version_dir}/cloud-github.mjs" "${install_dir}/prarness-github"
 ln -sfn "${version_dir}/cloud-publish.mjs" "${install_dir}/prarness-publish"
 
 "${install_dir}/prarness-github-setup" "$@"

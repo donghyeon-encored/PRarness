@@ -16,6 +16,15 @@ validation:
     - npm run lint
     - npm test
 
+ci:
+  required: true
+  trigger: pull_request
+  workflow: pr-validation.yml
+  app_slug: github-actions
+  required_checks:
+    - Secret-free repository validation
+  timeout_seconds: 900
+
 protected_paths:
   additional:
     - infra/production/**

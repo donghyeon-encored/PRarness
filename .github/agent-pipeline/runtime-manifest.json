@@ -4,17 +4,22 @@
   "files": [
     {
       "path": "cloud-github-setup.sh",
-      "sha256": "9d427180e0faa69445afdb7e462fef4acd378a987cd180596e5951eea95483e7",
+      "sha256": "c56778c975ca3e66ad20f24fd850f4f19bccb05085aee6050d0ad3c12f214d05",
       "executable": true
     },
     {
       "path": "repository-check.mjs",
-      "sha256": "70cb53555baedb45287d0a01d65d0d6b85241ece3c3506af3988f83fc238e53e",
+      "sha256": "5b71cd41b57bdb7102918a197f51e8b0be7bccd1d77d407045e0f4f507535988",
+      "executable": true
+    },
+    {
+      "path": "cloud-github.mjs",
+      "sha256": "d40af50fce1cbf762bdb9c42c28e23eb75243d5dddb9881ac84fd57b18b739ee",
       "executable": true
     },
     {
       "path": "cloud-publish.mjs",
-      "sha256": "80a48459aab9672fe829de7e3a2741481f0eea5d143fc97f88d6a9534116a50f",
+      "sha256": "756372cd06ef9df7c035fd8a3acfa7374a9ef1d201b79c511010b998ad3e3c0f",
       "executable": true
     },
     {

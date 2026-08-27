@@ -14,8 +14,8 @@ comments, `agent/issue-*` branch, commits, and draft pull request directly. Run
 `$HOME/.local/bin/prarness-repository-check --repository OWNER/REPO` and then
 `$HOME/.local/bin/prarness-github-setup --verify-write OWNER/REPO` first; the
 Cloud environment installs this versioned repository-independent runtime before
-the agent phase. Use `prarness-publish` for code-bearing branch/PR publication,
-and use the configured REST-capable `gh` CLI for scoped Issue/review comments
+the agent phase. Use `prarness-publish` for code-bearing branch/PR/CI publication,
+and `prarness-github` for verified Issue, comment, CI, deployment, and reconcile operations
 instead of asking a person to log in. Keep writes scoped to the source Issue and
 its managed branch/PR, never force-push or merge, and never print or extract the
 configured credential.

@@ -5,6 +5,7 @@ import test from "node:test";
 test("trusted controller and secret-free PR validation keep separate trust boundaries", async () => {
   const controller = await readFile(new URL("../../workflows/issue-review.yml", import.meta.url), "utf8");
   const validation = await readFile(new URL("../../workflows/pr-validation.yml", import.meta.url), "utf8");
+  const reusable = await readFile(new URL("../../workflows/reusable-validation.yml", import.meta.url), "utf8");
   assert.doesNotMatch(controller, /self-hosted|codex-cloud-relay|CODEX_CLOUD_CLI_PATH/);
   assert.doesNotMatch(controller, /openai\/codex-action|anthropics\/claude-code-action|OPENAI_API_KEY|ANTHROPIC_API_KEY/);
   assert.match(controller, /issues:\n\s+types: \[opened\]/);
@@ -25,6 +26,11 @@ test("trusted controller and secret-free PR validation keep separate trust bound
   assert.match(validation, /permissions:\n  contents: read/);
   assert.doesNotMatch(validation, /private-key:|permission-contents: write|permission-pull-requests: write/);
   assert.match(validation, /npm test --prefix \.github\/agent-pipeline/);
+  assert.match(reusable, /workflow_call:/);
+  assert.match(reusable, /permissions:\n  contents: read/);
+  assert.match(reusable, /YAML\.safe_load_file\("\.github\/prarness\.yml"/);
+  assert.match(reusable, /bash --noprofile --norc -euo pipefail -c/);
+  assert.doesNotMatch(reusable, /secrets:|private-key:|pull_request_target|persist-credentials: true/);
   for (const job of ["triage", "analyze", "review", "implement"]) {
     const block = controller.match(new RegExp(`\\n  ${job}:[\\s\\S]*?(?=\\n  [a-z][a-z-]+:|$)`))?.[0] ?? "";
     assert.notEqual(block, "");

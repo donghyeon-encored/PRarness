@@ -29,6 +29,14 @@ ownership:
 validation:
   commands:
     - git diff --quiet HEAD --
+ci:
+  required: true
+  trigger: pull_request
+  workflow: pr-validation.yml
+  app_slug: github-actions
+  required_checks:
+    - Test CI
+  timeout_seconds: 30
 `);
   await writeFile(join(repo, "src/app.js"), "export const value = 1;\n");
   await exec(realGit, ["add", "."], { cwd: repo });
@@ -75,7 +83,18 @@ exit 2
     request_id: "gh-12345678-implement",
     commands: [{ command: "git diff --quiet HEAD --", passed: true, exit_code: 0 }],
   }));
-  return { bin, headSha, repo, request, sourceSha, validation };
+  const authMetadata = join(directory, "prarness-auth.json");
+  await writeFile(authMetadata, JSON.stringify({
+    version: 1,
+    repository: "owner/repo",
+    host: "github.com",
+    auth_kind: "github_app",
+    expires_at: "2099-01-01T00:00:00Z",
+    app_id: "42",
+    installation_id: "123",
+    permissions: { contents: "write", issues: "write", pull_requests: "write", actions: "write", checks: "write", deployments: "write" },
+  }));
+  return { authMetadata, bin, headSha, repo, request, sourceSha, validation };
 }
 
 function json(data, status = 200) {
@@ -92,6 +111,7 @@ test("Cloud publisher confirms the pushed SHA and live REST pull request", async
   process.env.TEST_REMOTE_SHA = context.headSha;
   process.env.AGENT_APP_ID = "42";
   const comments = [];
+  const commentById = new Map();
   let pull = null;
   globalThis.fetch = async (url, options = {}) => {
     const parsed = new URL(url);
@@ -101,6 +121,9 @@ test("Cloud publisher confirms the pushed SHA and live REST pull request", async
     if (method === "GET" && path.startsWith("/repos/owner/repo/pulls?")) return json([]);
     if (method === "GET" && path === "/repos/owner/repo/commits/main") return json({ sha: context.sourceSha });
     if (method === "GET" && path === "/repos/owner/repo/issues/1/comments?per_page=100&page=1") return json(comments);
+    if (method === "GET" && path === `/repos/owner/repo/commits/${context.headSha}/check-runs?per_page=100`) return json({ check_runs: [
+      { id: 50, name: "Test CI", status: "completed", conclusion: "success", head_sha: context.headSha, app: { slug: "github-actions" }, details_url: "https://github.com/owner/repo/actions/runs/50" },
+    ] });
     if (method === "GET" && path === "/repos/owner/repo/assignees/reviewer") return json({ login: "reviewer" });
     if (method === "POST" && path === "/repos/owner/repo/pulls") {
       pull = {
@@ -118,21 +141,29 @@ test("Cloud publisher confirms the pushed SHA and live REST pull request", async
     if (method === "PATCH" && path === "/repos/owner/repo/issues/7") return json({ number: 7, assignees: [{ login: "reviewer" }] });
     if (method === "POST" && path === "/repos/owner/repo/issues/1/comments") {
       const body = JSON.parse(options.body).body;
-      const comment = { id: 11, html_url: "https://github.com/owner/repo/issues/1#issuecomment-11", body, user: { login: "app[bot]", type: "Bot" }, performed_via_github_app: { id: 42 }, updated_at: new Date().toISOString() };
+      const id = comments.length === 0 ? 11 : 13;
+      const comment = { id, html_url: `https://github.com/owner/repo/issues/1#issuecomment-${id}`, issue_url: "https://api.github.com/repos/owner/repo/issues/1", body, user: { login: "app[bot]", type: "Bot" }, performed_via_github_app: { id: 42 }, updated_at: new Date().toISOString() };
       comments.push(comment);
+      commentById.set(comment.id, comment);
       return json(comment, 201);
     }
-    if (method === "POST" && path === "/repos/owner/repo/issues/7/comments") return json({ id: 12, html_url: "https://github.com/owner/repo/pull/7#issuecomment-12" }, 201);
+    if (method === "POST" && path === "/repos/owner/repo/issues/7/comments") {
+      const comment = { id: 12, html_url: "https://github.com/owner/repo/pull/7#issuecomment-12", issue_url: "https://api.github.com/repos/owner/repo/issues/7", body: JSON.parse(options.body).body, user: { login: "app[bot]", type: "Bot" }, performed_via_github_app: { id: 42 } };
+      commentById.set(comment.id, comment);
+      return json(comment, 201);
+    }
+    if (method === "GET" && path.startsWith("/repos/owner/repo/issues/comments/")) return json(commentById.get(Number(path.split("/").at(-1))));
     if (method === "GET" && path === "/repos/owner/repo/pulls/7") return json(pull);
     return json({ message: `unhandled ${method} ${path}` }, 500);
   };
 
   try {
-    const result = await publishCloudRequest({ repo: context.repo, request: context.request, validation: context.validation });
+    const result = await publishCloudRequest({ repo: context.repo, request: context.request, validation: context.validation, auth_metadata: context.authMetadata, poll_interval_ms: 0 });
     assert.equal(result.verified, true);
     assert.equal(result.remote_sha, context.headSha);
     assert.equal(result.pr_url, "https://github.com/owner/repo/pull/7");
     assert.equal(result.draft, true);
+    assert.equal(result.completion_comment, 13);
   } finally {
     process.env.PATH = priorPath;
     if (priorRemoteSha === undefined) delete process.env.TEST_REMOTE_SHA; else process.env.TEST_REMOTE_SHA = priorRemoteSha;
@@ -165,6 +196,14 @@ publication:
 validation:
   commands:
     - git diff --quiet HEAD --
+ci:
+  required: true
+  trigger: pull_request
+  workflow: pr-validation.yml
+  app_slug: github-actions
+  required_checks:
+    - Test CI
+  timeout_seconds: 30
 protected_paths:
   additional:
     - src/app.js

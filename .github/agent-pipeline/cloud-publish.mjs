@@ -4,7 +4,14 @@ import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { GitHubClient, matchesGlob, publish, stableStringify } from "./pipeline.mjs";
+import { matchesGlob, publish, stableStringify } from "./pipeline.mjs";
+import {
+  createCloudGitHubClient,
+  dispatchAndVerifyCi,
+  preflightGitHubCapabilities,
+  reconcilePublicationReceipt,
+  upsertManagedComment,
+} from "./cloud-github.mjs";
 import { checkRepositoryCompatibility } from "./repository-check.mjs";
 
 class CloudPublishError extends Error {
@@ -91,17 +98,6 @@ function changedPaths(repo, sourceSha) {
   return raw.split("\0").filter(Boolean).sort();
 }
 
-function ghToken() {
-  try {
-    const token = execFileSync("gh", ["auth", "token"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
-    requireCondition(token.length > 0, "MISSING_GITHUB_TOKEN", "gh did not provide an authenticated token");
-    return token;
-  } catch (error) {
-    if (error instanceof CloudPublishError) throw error;
-    throw new CloudPublishError("MISSING_GITHUB_TOKEN", "gh did not provide an authenticated token");
-  }
-}
-
 function remoteBranchSha(repo, branch) {
   const output = git(repo, ["ls-remote", "--heads", "origin", `refs/heads/${branch}`]);
   const match = output.match(/^([0-9a-f]{40})\s+refs\/heads\/.+$/m);
@@ -159,8 +155,8 @@ export async function publishCloudRequest(options = {}) {
   const validations = readValidation(options.validation, request, compatibility.validation_commands);
   requireCondition(git(repo, ["status", "--porcelain=v1", "-z"]).length === 0, "DIRTY_WORKTREE", "Publication requires a clean worktree after validation and commit");
 
-  const token = ghToken();
-  const client = new GitHubClient({ token, repository: request.repository });
+  await preflightGitHubCapabilities(request.repository, { ...options, repo });
+  const { client } = createCloudGitHubClient(request.repository, options);
   const publicationInput = {
     issue: request.issue,
     branch: request.branch,
@@ -195,7 +191,15 @@ export async function publishCloudRequest(options = {}) {
   requireCondition(pull?.head?.ref === request.branch && pull?.head?.sha === head, "PR_HEAD_MISMATCH", "Pull request head does not match the published branch and SHA");
   requireCondition(pull?.state === "open" && pull?.merged !== true, "UNSAFE_PR_LIFECYCLE", "Pull request is not open and unmerged");
 
-  return {
+  const ci = await dispatchAndVerifyCi({
+    version: 1,
+    request_id: request.request_id,
+    repository: request.repository,
+    operation: "ci",
+    ref: request.branch,
+    sha: head,
+  }, { ...options, repo });
+  const receipt = {
     version: 1,
     request_id: request.request_id,
     repository: request.repository,
@@ -207,8 +211,24 @@ export async function publishCloudRequest(options = {}) {
     pr_url: result.pr_url,
     draft: pull.draft === true,
     reused: result.reused === true,
-    verified: true,
+    comments: {
+      issue: result.comment?.comment_id ?? null,
+      pull_request: result.summary?.id ?? null,
+    },
+    ci,
+    completed_at: new Date().toISOString(),
+    verified: false,
   };
+  const verified = await reconcilePublicationReceipt(receipt, { ...options, repo, timeout_seconds: 30 });
+  const completion = await upsertManagedComment({
+    version: 1,
+    request_id: request.request_id,
+    repository: request.repository,
+    operation: "comment",
+    number: request.issue,
+    body: `Verified publication complete: PR #${verified.pr} at ${verified.remote_sha}; required CI checks passed.`,
+  }, options);
+  return { ...verified, completion_comment: completion.comment_id };
 }
 
 function parseArgs(argv) {

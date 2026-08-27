@@ -34,8 +34,8 @@ The repository has two distinct execution modes:
   repository-scoped Cloud environment credential, selects the repository, and
   verifies the credential's own authorization source plus the Git HTTPS
   credential helper before model work starts. For a GitHub App, the minted
-  installation-token response must grant Contents, Issues, and Pull requests
-  write; for a user token, repository `permissions.push` must be true. A public
+  installation-token response must grant Contents, Issues, Pull requests,
+  Actions, Checks, and Deployments write. A public
   `git ls-remote` success is never sufficient proof of write access.
 - Target repositories do not copy this pipeline, its prompts, schemas, or
   ground rules. They opt in through the protected `.github/prarness.yml`
@@ -43,6 +43,11 @@ The repository has two distinct execution modes:
   runtime is checksum-verified and installed outside the checkout during Cloud
   setup/maintenance. A legacy or conflicting repository instruction fails
   before model work and is never overridden by the Cloud prompt.
+- GitHub App webhooks are the automated return channel. The central receiver
+  verifies the raw-body HMAC and delivery ID, trusts canonical comments only
+  when `performed_via_github_app.id` matches the configured App, and queues
+  each delivery idempotently. Target repositories never need the App key, App
+  ID, or Cloud environment ID in Actions variables or secrets.
 - In interactive maintenance mode, Codex may edit protected files and use the
   user's already-authorized GitHub connection to create or reuse a
   `codex/maintenance-*` branch, commit, push, open or update a draft pull
@@ -59,7 +64,8 @@ The repository has two distinct execution modes:
 - For code-bearing publication, the Cloud agent runs required validation and
   protected-path checks before committing or pushing. It must use the
   SHA-bound `prarness-publish` command and may report success only after the
-  remote branch SHA and live pull-request head match its local commit. Intake,
+  remote branch SHA, live pull-request head, App-authored canonical Issue/PR
+  comments, and every configured trusted CI check match its local commit. Intake,
   plan, and review comments may be updated as soon as their stage output is
   complete.
 - Never use `pull_request_target` for this pipeline. Never run a write-capable

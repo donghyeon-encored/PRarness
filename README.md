@@ -29,7 +29,10 @@ npm test
 .github/agent-pipeline/cloud-environment-bootstrap.sh  reusable Cloud installer
 .github/agent-pipeline/cloud-github-setup.sh  generic Cloud remote/gh bootstrap
 .github/agent-pipeline/repository-check.mjs  target opt-in/policy compatibility gate
+.github/agent-pipeline/cloud-github.mjs  verified Issue/comment/CI/deployment/reconcile operations
 .github/agent-pipeline/cloud-publish.mjs  SHA-bound Cloud branch/PR publisher
+.github/agent-pipeline/github-app-controller.mjs  signed webhook ingress and idempotent dispatch spool
+.github/agent-pipeline/controller-dispatch.mjs  private repo mapping to ChatGPT-authenticated Cloud submit
 .github/agent-pipeline/runtime-manifest.json  immutable runtime file checksums
 .github/agent-pipeline/prompts/      model stage contracts
 .github/agent-pipeline/schemas/      structured-output and state schemas
@@ -38,31 +41,35 @@ npm test
 .github/prarness.yml                 this repository's target adapter contract
 .github/workflows/issue-review.yml   trusted default-branch controller
 .github/workflows/pr-validation.yml  secret-free pull-request validation
+.github/workflows/reusable-validation.yml  secret-free target CI entry point
 docs/git-ground-rules.md             authoritative repository policy
 ```
 
-## Before enabling the workflow
+## Enable the control plane
 
-The committed workflow contains secret names but no secret values. A human
-maintainer must review the protected workflow and ownership files, replace the
-remaining placeholder accounts in `.github/agent-pipeline/team.yaml`, install the
-repository-scoped GitHub App, and configure the referenced repository variable
-and App secret through GitHub and Codex Cloud settings. Configure every target
-repository's Cloud setup and maintenance scripts with the same SHA-pinned
-installer snippet from the Cloud relay runbook. It installs the central runtime
-outside the checkout, detects the target repository, supplies `origin` plus
-non-interactive `gh` authentication, and refreshes short-lived App credentials
-on cached-container maintenance. Before model work, the runtime requires an
-explicit `.github/prarness.yml` opt-in and rejects legacy publication rules.
-For code-bearing results, `prarness-publish` is successful only after the live
-remote branch and pull-request head both match the local commit.
+Install one GitHub App on every managed repository. Its ordinary runtime
+permissions are Contents, Issues, Pull requests, Actions, Checks, and
+Deployments write; Workflows write is added only to the separately authorized
+adapter/workflow maintenance path. Keep the App private key and webhook secret
+in the central controller/Cloud environment, never in a target repository.
 
-The public controller still archives SHA-bound Cloud requests and fails closed
-at the external relay boundary until a trusted result mailbox is deployed. A
-target must not delete its existing trigger/controller merely because the
-Cloud runtime installer is available; migrate to the thin adapter only after a
-central reusable controller or GitHub App webhook controller is live. See [the
-Cloud relay runbook](docs/codex-cloud-migration.md) and [the target adoption
+Run `github-app-controller.mjs serve` behind HTTPS to verify GitHub webhook
+signatures and queue Issue, canonical comment, managed PR, check, and workflow
+events exactly once. Its `drain` command hands those normalized jobs to the
+ChatGPT-authenticated Codex Cloud relay. GitHub is the durable result channel:
+the next event is accepted only after the App-authored comment, live PR head,
+and required check state exist on GitHub. There is no target Actions secret or
+`AGENT_APP_ID`/`CODEX_CLOUD_ENV_ID` repository variable in this path.
+
+Configure each target Cloud environment with the SHA-pinned installer from the
+Cloud runbook. It installs the central runtime outside the checkout, repairs
+`origin`, configures non-interactive App authentication, records the App and
+installation identity, and proves every required write capability. The
+publisher verifies the live branch, draft PR, canonical Issue/PR comments, and
+all configured CI checks before emitting `verified: true`. Expiring credentials
+produce `TOKEN_REFRESH_REQUIRED`; the idempotent controller then starts a fresh
+continuation instead of reporting a partial success. See [the Cloud relay
+runbook](docs/codex-cloud-migration.md) and [the target adoption
 guide](docs/target-adoption.md).
 
 Never commit an App private key, API key, `.env` file, local `.npmrc`, or runner

@@ -454,9 +454,9 @@ mint_installation_token() {
 
   local request_body response validated_response
   if [[ ${PRARNESS_GITHUB_WORKFLOW_MAINTENANCE:-false} == true ]]; then
-    request_body=$(jq -cn --arg repo "$repo_name" '{repositories:[$repo],permissions:{contents:"write",issues:"write",pull_requests:"write",workflows:"write"}}')
+    request_body=$(jq -cn --arg repo "$repo_name" '{repositories:[$repo],permissions:{contents:"write",issues:"write",pull_requests:"write",actions:"write",checks:"write",deployments:"write",workflows:"write"}}')
   else
-    request_body=$(jq -cn --arg repo "$repo_name" '{repositories:[$repo],permissions:{contents:"write",issues:"write",pull_requests:"write"}}')
+    request_body=$(jq -cn --arg repo "$repo_name" '{repositories:[$repo],permissions:{contents:"write",issues:"write",pull_requests:"write",actions:"write",checks:"write",deployments:"write"}}')
   fi
   response=$(github_api_post "$jwt" "$request_body" "${api_url}/app/installations/${installation_id}/access_tokens")
   if [[ ${PRARNESS_GITHUB_WORKFLOW_MAINTENANCE:-false} == true ]] &&
@@ -466,9 +466,10 @@ mint_installation_token() {
   fi
   if ! validated_response=$(printf '%s' "$response" | jq -e '
     select(.token | type == "string" and length > 0) |
-    select(.permissions.contents == "write" and .permissions.issues == "write" and .permissions.pull_requests == "write") |
-    {token:.token,expires_at:(.expires_at // null),permissions:{contents:.permissions.contents,issues:.permissions.issues,pull_requests:.permissions.pull_requests,workflows:(.permissions.workflows // null)}}'); then
-    echo 'GitHub App installation token is missing required Contents, Issues, or Pull requests write permission.' >&2
+    select(.permissions.contents == "write" and .permissions.issues == "write" and .permissions.pull_requests == "write" and
+      .permissions.actions == "write" and .permissions.checks == "write" and .permissions.deployments == "write") |
+    {token:.token,expires_at:(.expires_at // null),permissions:{contents:.permissions.contents,issues:.permissions.issues,pull_requests:.permissions.pull_requests,actions:.permissions.actions,checks:.permissions.checks,deployments:.permissions.deployments,workflows:(.permissions.workflows // null)}}'); then
+    echo 'GitHub App installation token is missing required Contents, Issues, Pull requests, Actions, Checks, or Deployments write permission.' >&2
     return 2
   fi
   printf '%s' "$validated_response"
@@ -493,6 +494,9 @@ if [[ $mode == configure ]]; then
   auth_kind=token
   granted_permissions='{}'
   credential_fingerprint=''
+  app_id=''
+  installation_id=''
+  bot_login=${AGENT_APP_BOT_LOGIN:-}
   if [[ -n ${AGENT_APP_ID:-} || -n ${AGENT_APP_PRIVATE_KEY:-} ]]; then
     if [[ -z ${AGENT_APP_ID:-} || -z ${AGENT_APP_PRIVATE_KEY:-} ]]; then
       echo 'GitHub App authentication requires both AGENT_APP_ID and AGENT_APP_PRIVATE_KEY.' >&2
@@ -506,6 +510,15 @@ if [[ $mode == configure ]]; then
     expires_at=$(printf '%s' "$credential_response" | jq -r '.expires_at // empty')
     auth_kind=github_app
     granted_permissions=$(printf '%s' "$credential_response" | jq -c '.permissions')
+    app_id=${AGENT_APP_ID}
+    installation_id=${AGENT_APP_INSTALLATION_ID:-}
+    if [[ -z $installation_id ]]; then
+      owner=${repository%%/*}
+      repo_name=${repository#*/}
+      jwt=$(create_app_jwt)
+      installation_id=$(github_api_get "$jwt" "${api_url}/repos/${owner}/${repo_name}/installation" | jq -er '.id')
+      unset jwt
+    fi
     unset credential_response
   elif [[ -z $token ]]; then
     if ! gh api "repos/$repository" --silent >/dev/null 2>&1; then
@@ -552,8 +565,9 @@ if [[ $mode == configure ]]; then
   chmod 600 "$metadata_tmp"
   jq -cn --arg repository "$repository" --arg host "$host" --arg expires_at "$expires_at" \
     --arg auth_kind "$auth_kind" --arg credential_fingerprint "$credential_fingerprint" \
+    --arg app_id "$app_id" --arg installation_id "$installation_id" --arg bot_login "$bot_login" \
     --argjson permissions "$granted_permissions" \
-    '{version:1,repository:$repository,host:$host,auth_kind:$auth_kind,expires_at:(if $expires_at == "" then null else $expires_at end),permissions:$permissions,credential_fingerprint:(if $credential_fingerprint == "" then null else $credential_fingerprint end)}' > "$metadata_tmp"
+    '{version:1,repository:$repository,host:$host,auth_kind:$auth_kind,app_id:(if $app_id == "" then null else $app_id end),installation_id:(if $installation_id == "" then null else $installation_id end),bot_login:(if $bot_login == "" then null else $bot_login end),expires_at:(if $expires_at == "" then null else $expires_at end),permissions:$permissions,credential_fingerprint:(if $credential_fingerprint == "" then null else $credential_fingerprint end)}' > "$metadata_tmp"
   mv "$metadata_tmp" "$auth_metadata_file"
   unset token GITHUB_TOKEN GH_TOKEN CODEX_GITHUB_TOKEN AGENT_APP_PRIVATE_KEY
 fi
@@ -625,8 +639,10 @@ if [[ -f $auth_metadata_file ]]; then
   }
   auth_kind=$(jq -r '.auth_kind // "unknown"' "$auth_metadata_file")
   if [[ $auth_kind == github_app ]]; then
-    jq -e '.permissions.contents == "write" and .permissions.issues == "write" and .permissions.pull_requests == "write"' "$auth_metadata_file" >/dev/null || {
-      echo 'GitHub App installation token is missing required Contents, Issues, or Pull requests write permission.' >&2
+    jq -e '.app_id != null and .installation_id != null and .permissions.contents == "write" and .permissions.issues == "write" and
+      .permissions.pull_requests == "write" and .permissions.actions == "write" and .permissions.checks == "write" and
+      .permissions.deployments == "write"' "$auth_metadata_file" >/dev/null || {
+      echo 'GitHub App identity or required write capability is missing from the managed credential.' >&2
       exit 2
     }
   else
@@ -652,7 +668,12 @@ if [[ -f $auth_metadata_file ]]; then
       exit 2
     fi
     now_epoch=$(date +%s)
-    if (( expires_epoch - now_epoch < 300 )); then
+    minimum_ttl=${PRARNESS_MIN_GITHUB_CREDENTIAL_TTL_SECONDS:-1800}
+    if [[ ! $minimum_ttl =~ ^[1-9][0-9]*$ ]] || (( minimum_ttl < 300 || minimum_ttl > 3600 )); then
+      echo 'PRARNESS_MIN_GITHUB_CREDENTIAL_TTL_SECONDS must be from 300 through 3600.' >&2
+      exit 2
+    fi
+    if (( expires_epoch - now_epoch < minimum_ttl )); then
       echo 'Persisted GitHub credential expires too soon for publication; rerun Cloud setup or maintenance.' >&2
       exit 2
     fi

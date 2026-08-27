@@ -16,6 +16,7 @@ function validConfig() {
     publication: { mode: "codex_cloud_direct", branch_prefix: "agent/issue-" },
     ownership: { source: "codeowners", fallback: "maintainer" },
     validation: { commands: ["npm test"] },
+    ci: { required: true, trigger: "pull_request", workflow: "ci.yml", app_slug: "github-actions", required_checks: ["Test"], timeout_seconds: 300 },
     protected_paths: { additional: ["infra/production/**"] },
   };
 }
@@ -36,6 +37,14 @@ ownership:
 validation:
   commands:
     - npm test
+ci:
+  required: true
+  trigger: pull_request
+  workflow: ci.yml
+  app_slug: github-actions
+  required_checks:
+    - Test
+  timeout_seconds: 300
 protected_paths:
   additional:
     - infra/production/**

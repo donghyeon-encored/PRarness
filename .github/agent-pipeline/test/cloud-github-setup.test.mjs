@@ -105,7 +105,7 @@ fi
 if [[ $url == */app/installations/*/access_tokens ]]; then
   if [[ $* == *'contents":"write'* ]]; then
     if [[ \${TEST_APP_WRITE_PERMISSIONS:-true} == true ]]; then
-      printf '%s' '{"token":"github_app_write_token","expires_at":"2099-01-01T00:00:00Z","permissions":{"contents":"write","issues":"write","pull_requests":"write"}}'
+      printf '%s' '{"token":"github_app_write_token","expires_at":"2099-01-01T00:00:00Z","permissions":{"contents":"write","issues":"write","pull_requests":"write","actions":"write","checks":"write","deployments":"write"}}'
     else
       printf '%s' '{"token":"github_app_write_token","expires_at":"2099-01-01T00:00:00Z","permissions":{"contents":"read","issues":"write","pull_requests":"write"}}'
     fi
@@ -239,7 +239,12 @@ test("Cloud setup discovers a remote-less checkout from GitHub App installations
   await assertConfigured(context, "owner/target", "github_app_write_token");
   const metadata = JSON.parse(await readFile(join(context.home, ".config/gh/prarness-auth.json"), "utf8"));
   assert.equal(metadata.auth_kind, "github_app");
+  assert.equal(metadata.app_id, "42");
+  assert.equal(metadata.installation_id, "123");
   assert.equal(metadata.permissions.contents, "write");
+  assert.equal(metadata.permissions.actions, "write");
+  assert.equal(metadata.permissions.checks, "write");
+  assert.equal(metadata.permissions.deployments, "write");
   await exec("bash", [setup, "--verify-write", "owner/target"], { cwd: context.repo, env: context.env });
 });
 

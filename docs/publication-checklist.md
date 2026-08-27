@@ -34,14 +34,13 @@ procedure.
   active, assignable collaborators.
 - Confirm branch protection, Actions permissions, and CODEOWNERS coverage meet
   `docs/git-ground-rules.md`.
-- Install a repository-scoped GitHub App with Contents, Issues, and Pull
-  requests write permission, or create an equivalently scoped fine-grained
-  token for the Codex Cloud worker. Add Workflows write only to a separately
+- Install a repository-scoped GitHub App with Contents, Issues, Pull requests,
+  Actions, Checks, and Deployments write permission. Add Workflows write only to a separately
   authorized interactive workflow-maintenance environment; ordinary Issue work
   does not need it.
-- Add `AGENT_APP_ID` as a repository variable.
-- Add `AGENT_APP_PRIVATE_KEY` as a repository secret. Never place its value in
-  this checkout or expose it to the external relay. Its value must be the full
+- Store the App ID, App private key, and webhook secret only in the central
+  controller and the Codex Cloud environment. Do not add them as target
+  repository Actions variables or secrets. The private key value must be the full
   downloaded PEM contents, including the `BEGIN` and `END` lines, rather than a
   path to the `.pem` file. When a secret editor cannot retain multiline values,
   use a base64 encoding of the complete PEM with the literal `base64:` prefix;
@@ -51,11 +50,11 @@ procedure.
   `auth.json` into Actions.
 - Configure the pinned CLI path only in the external relay's local service
   configuration; never expose that service account to repository jobs.
-- Create or select a Codex Cloud environment for the target repository and add
-  its ID as the `CODEX_CLOUD_ENV_ID` repository variable. In that environment, add
-  either `CODEX_GITHUB_TOKEN` or `AGENT_APP_ID` plus
-  `AGENT_APP_PRIVATE_KEY` (and optionally `AGENT_APP_INSTALLATION_ID`) as setup
-  credentials. Never put their values in repository files.
+- Create or select a Codex Cloud environment for the target repository and
+  record its ID in the controller's private repository map. In that environment,
+  add `AGENT_APP_ID` plus `AGENT_APP_PRIVATE_KEY` (and optionally
+  `AGENT_APP_INSTALLATION_ID`) as setup credentials. Never put their values in
+  repository files.
 - Install the configured GitHub App on every intended target repository. A
   checkout without a GitHub remote is matched automatically against accessible
   repositories by its HEAD commit. Set `CODEX_GITHUB_REPOSITORY=OWNER/REPO`
@@ -64,16 +63,17 @@ procedure.
 - Configure both the Cloud setup script and maintenance script with the same
   SHA-pinned, repository-independent installer from
   `docs/codex-cloud-migration.md`. It checksum-verifies the full central runtime
-  and installs `prarness-github-setup`, `prarness-repository-check`, and
-  `prarness-publish` outside the checkout. It detects the target repository,
-  repairs `origin`, refreshes or loads the repository-scoped credential, and
-  verifies App installation-token permissions (or user-token repository push
-  permission) plus the HTTPS Git credential helper without an interactive
-  login. For managed App/token credentials it pins the repository-local HTTPS
+  and installs `prarness-github-setup`, `prarness-repository-check`,
+  `prarness-github`, and `prarness-publish` outside the checkout. It detects the
+  target repository, repairs `origin`, refreshes the repository-scoped App
+  credential, and verifies every required installation-token permission plus
+  the HTTPS Git credential helper without an interactive login. For managed
+  App credentials it pins the repository-local HTTPS
   username to `x-access-token` so a Cloud checkout cannot inherit an
   incompatible global credential username, and writes both the active and
-  multi-account `gh` host entries. Existing `gh` authentication instead pins
-  its authenticated login. Do not use a
+  multi-account `gh` host entries. Existing `gh` authentication is retained
+  only for bootstrap compatibility; managed publication still requires the
+  repository-scoped App identity. Do not use a
   GitHub App's repository `permissions.push` field as the
   App authorization test; App authorization comes from its installation/token
   permissions. A public `git ls-remote` result alone is not a write check.
@@ -81,12 +81,14 @@ procedure.
   `prarness-repository-check --repository OWNER/REPO` before model work and
   remove copied `.github/agent-pipeline/**`, copied PRarness ground rules, and
   legacy instructions that prohibit the Cloud worker's scoped GitHub writes.
-- Do not remove the target's current event trigger until the central reusable
-  controller or GitHub App webhook controller and its signed result mailbox are
-  deployed. The runtime installer alone does not dispatch Cloud work.
+- Start the central `github-app-controller.mjs` receiver and its dispatcher
+  before removing the target's current event trigger. Confirm that duplicate
+  delivery IDs are ignored and failed dispatches retry from the spool. The
+  runtime installer alone does not dispatch Cloud work.
 - Run `npm ci --ignore-scripts`, `npm run lint`, and `npm test` on the exact
   source snapshot that will be published.
-- Confirm that the credential-isolated `Pull request validation` check runs on
+- Confirm that `.github/prarness.yml` names the trusted CI App and required
+  checks, and that the credential-isolated `Pull request validation` check runs on
   `codex/maintenance-*` and `agent/issue-*` pull requests. A green gate-only
   no-op is not sufficient validation.
 

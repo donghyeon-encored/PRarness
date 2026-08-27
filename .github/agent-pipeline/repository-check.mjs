@@ -37,8 +37,13 @@ function exactKeys(value, allowed, location) {
   requireCondition(unexpected.length === 0, "INVALID_PRARNESS_CONFIG", `${location} contains unsupported keys: ${unexpected.join(", ")}`);
 }
 
+function safeWorkflowName(value) {
+  return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._/-]*\.ya?ml$/.test(value) &&
+    !value.startsWith("/") && !value.includes("..") && !value.includes("\\");
+}
+
 export function validateRepositoryConfig(config) {
-  exactKeys(config, ["version", "runtime", "publication", "ownership", "validation", "protected_paths"], "config");
+  exactKeys(config, ["version", "runtime", "publication", "ownership", "validation", "ci", "protected_paths"], "config");
   requireCondition(config.version === 1, "INVALID_PRARNESS_CONFIG", "config.version must be 1");
 
   exactKeys(config.runtime, ["contract"], "runtime");
@@ -59,6 +64,18 @@ export function validateRepositoryConfig(config) {
   requireCondition(Array.isArray(config.validation.commands) && config.validation.commands.length > 0, "INVALID_PRARNESS_CONFIG", "validation.commands must be a non-empty list");
   requireCondition(config.validation.commands.every((command) => typeof command === "string" && command.trim() && !command.includes("\0") && !command.includes("\n")), "INVALID_PRARNESS_CONFIG", "validation.commands must contain single-line commands");
 
+  exactKeys(config.ci, ["required", "trigger", "workflow", "app_slug", "required_checks", "timeout_seconds"], "ci");
+  requireCondition(config.ci.required === true, "INVALID_PRARNESS_CONFIG", "ci.required must be true for managed publication");
+  requireCondition(["pull_request", "workflow_dispatch"].includes(config.ci.trigger), "INVALID_PRARNESS_CONFIG", "ci.trigger must be pull_request or workflow_dispatch");
+  requireCondition(safeWorkflowName(config.ci.workflow), "INVALID_PRARNESS_CONFIG", "ci.workflow must be a safe .yml or .yaml path/name");
+  requireCondition(typeof config.ci.app_slug === "string" && /^[A-Za-z0-9][A-Za-z0-9-]{0,99}$/.test(config.ci.app_slug), "INVALID_PRARNESS_CONFIG", "ci.app_slug must identify the trusted check provider");
+  requireCondition(Array.isArray(config.ci.required_checks) && config.ci.required_checks.length > 0 &&
+    config.ci.required_checks.every((name) => typeof name === "string" && name.trim() && !name.includes("\0") && !name.includes("\n")),
+    "INVALID_PRARNESS_CONFIG", "ci.required_checks must be a non-empty list of single-line check names");
+  requireCondition(new Set(config.ci.required_checks).size === config.ci.required_checks.length, "INVALID_PRARNESS_CONFIG", "ci.required_checks must be unique");
+  requireCondition(Number.isInteger(config.ci.timeout_seconds) && config.ci.timeout_seconds >= 30 && config.ci.timeout_seconds <= 3000,
+    "INVALID_PRARNESS_CONFIG", "ci.timeout_seconds must be an integer from 30 through 3000 so a one-hour App token retains a publication safety margin");
+
   if (config.protected_paths !== undefined) {
     exactKeys(config.protected_paths, ["additional"], "protected_paths");
     requireCondition(Array.isArray(config.protected_paths.additional), "INVALID_PRARNESS_CONFIG", "protected_paths.additional must be a list");
@@ -71,6 +88,14 @@ export function validateRepositoryConfig(config) {
     publication_mode: config.publication.mode,
     branch_prefix: branchPrefix,
     validation_commands: [...config.validation.commands],
+    ci: {
+      required: config.ci.required,
+      trigger: config.ci.trigger,
+      workflow: config.ci.workflow,
+      app_slug: config.ci.app_slug,
+      required_checks: [...config.ci.required_checks],
+      timeout_seconds: config.ci.timeout_seconds,
+    },
     protected_paths: [...(config.protected_paths?.additional ?? [])],
     ownership: config.ownership ?? null,
   };
