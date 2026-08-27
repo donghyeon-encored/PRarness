@@ -95,9 +95,13 @@ if [[ $url == */installation ]]; then
 fi
 if [[ $url == */app/installations/*/access_tokens ]]; then
   if [[ $* == *'contents":"write'* ]]; then
-    printf '%s' '{"token":"github_app_write_token","expires_at":"2099-01-01T00:00:00Z"}'
+    if [[ \${TEST_APP_WRITE_PERMISSIONS:-true} == true ]]; then
+      printf '%s' '{"token":"github_app_write_token","expires_at":"2099-01-01T00:00:00Z","permissions":{"contents":"write","issues":"write","pull_requests":"write"}}'
+    else
+      printf '%s' '{"token":"github_app_write_token","expires_at":"2099-01-01T00:00:00Z","permissions":{"contents":"read","issues":"write","pull_requests":"write"}}'
+    fi
   else
-    printf '%s' '{"token":"github_app_discovery_token","expires_at":"2099-01-01T00:00:00Z"}'
+    printf '%s' '{"token":"github_app_discovery_token","expires_at":"2099-01-01T00:00:00Z","permissions":{"contents":"read"}}'
   fi
   exit 0
 fi
@@ -172,8 +176,13 @@ test("Cloud setup discovers a remote-less checkout from GitHub App installations
     { full_name: "owner/target" },
   ] });
   context.env.TEST_MATCH_REPOSITORIES = "owner/target";
+  context.env.TEST_PUSH_PERMISSION = "false";
   await exec("bash", [setup], { cwd: context.repo, env: context.env });
   await assertConfigured(context, "owner/target", "github_app_write_token");
+  const metadata = JSON.parse(await readFile(join(context.home, ".config/gh/prarness-auth.json"), "utf8"));
+  assert.equal(metadata.auth_kind, "github_app");
+  assert.equal(metadata.permissions.contents, "write");
+  await exec("bash", [setup, "--verify-write", "owner/target"], { cwd: context.repo, env: context.env });
 });
 
 test("Cloud setup normalizes a quoted GitHub App PEM with escaped newlines", async () => {
@@ -274,6 +283,19 @@ test("Cloud write verification rejects repository read access without push permi
   context.env.TEST_PUSH_PERMISSION = "false";
   await assert.rejects(
     exec("bash", [setup, "owner/repo"], { cwd: context.repo, env: context.env }),
-    (error) => error.code === 2 && /does not have repository push permission/.test(error.stderr),
+    (error) => error.code === 2 && /user token does not have repository push permission/.test(error.stderr),
+  );
+});
+
+test("Cloud setup rejects an App token response without required write permissions", async () => {
+  const context = await harness("owner/target");
+  await installFakeCurl(context);
+  delete context.env.CODEX_GITHUB_TOKEN;
+  context.env.AGENT_APP_ID = "42";
+  context.env.AGENT_APP_PRIVATE_KEY = appPrivateKey();
+  context.env.TEST_APP_WRITE_PERMISSIONS = "false";
+  await assert.rejects(
+    exec("bash", [setup, "owner/target"], { cwd: context.repo, env: context.env }),
+    (error) => error.code === 2 && /valid AGENT_APP_ID\/AGENT_APP_PRIVATE_KEY/.test(error.stderr),
   );
 });

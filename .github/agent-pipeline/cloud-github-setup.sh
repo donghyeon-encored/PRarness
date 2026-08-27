@@ -448,14 +448,26 @@ mint_installation_token() {
     return 2
   fi
 
-  local request_body response
+  local request_body response validated_response
   if [[ ${PRARNESS_GITHUB_WORKFLOW_MAINTENANCE:-false} == true ]]; then
     request_body=$(jq -cn --arg repo "$repo_name" '{repositories:[$repo],permissions:{contents:"write",issues:"write",pull_requests:"write",workflows:"write"}}')
   else
     request_body=$(jq -cn --arg repo "$repo_name" '{repositories:[$repo],permissions:{contents:"write",issues:"write",pull_requests:"write"}}')
   fi
   response=$(github_api_post "$jwt" "$request_body" "${api_url}/app/installations/${installation_id}/access_tokens")
-  printf '%s' "$response" | jq -e '{token:(.token | select(type == "string" and length > 0)),expires_at:(.expires_at // null)}'
+  if [[ ${PRARNESS_GITHUB_WORKFLOW_MAINTENANCE:-false} == true ]] &&
+     ! printf '%s' "$response" | jq -e '.permissions.workflows == "write"' >/dev/null; then
+    echo 'GitHub App installation token is missing required Workflows write permission for interactive workflow maintenance.' >&2
+    return 2
+  fi
+  if ! validated_response=$(printf '%s' "$response" | jq -e '
+    select(.token | type == "string" and length > 0) |
+    select(.permissions.contents == "write" and .permissions.issues == "write" and .permissions.pull_requests == "write") |
+    {token:.token,expires_at:(.expires_at // null),permissions:{contents:.permissions.contents,issues:.permissions.issues,pull_requests:.permissions.pull_requests,workflows:(.permissions.workflows // null)}}'); then
+    echo 'GitHub App installation token is missing required Contents, Issues, or Pull requests write permission.' >&2
+    return 2
+  fi
+  printf '%s' "$validated_response"
 }
 
 configure_gh_default_repository() {
@@ -473,6 +485,8 @@ auth_metadata_file="$config_dir/prarness-auth.json"
 if [[ $mode == configure ]]; then
   token=${CODEX_GITHUB_TOKEN:-${GH_TOKEN:-${GITHUB_TOKEN:-}}}
   expires_at=''
+  auth_kind=token
+  granted_permissions='{}'
   if [[ -n ${AGENT_APP_ID:-} || -n ${AGENT_APP_PRIVATE_KEY:-} ]]; then
     if [[ -z ${AGENT_APP_ID:-} || -z ${AGENT_APP_PRIVATE_KEY:-} ]]; then
       echo 'GitHub App authentication requires both AGENT_APP_ID and AGENT_APP_PRIVATE_KEY.' >&2
@@ -484,12 +498,15 @@ if [[ $mode == configure ]]; then
     }
     token=$(printf '%s' "$credential_response" | jq -er '.token')
     expires_at=$(printf '%s' "$credential_response" | jq -r '.expires_at // empty')
+    auth_kind=github_app
+    granted_permissions=$(printf '%s' "$credential_response" | jq -c '.permissions')
     unset credential_response
   elif [[ -z $token ]]; then
     if ! gh api "repos/$repository" --silent >/dev/null 2>&1; then
       echo 'Configure CODEX_GITHUB_TOKEN or AGENT_APP_ID/AGENT_APP_PRIVATE_KEY in the Codex Cloud environment.' >&2
       exit 2
     fi
+    auth_kind=existing
   fi
 
   if [[ -n $token ]]; then
@@ -511,7 +528,8 @@ if [[ $mode == configure ]]; then
   metadata_tmp=$(mktemp "$config_dir/prarness-auth.json.XXXXXX")
   chmod 600 "$metadata_tmp"
   jq -cn --arg repository "$repository" --arg host "$host" --arg expires_at "$expires_at" \
-    '{version:1,repository:$repository,host:$host,expires_at:(if $expires_at == "" then null else $expires_at end)}' > "$metadata_tmp"
+    --arg auth_kind "$auth_kind" --argjson permissions "$granted_permissions" \
+    '{version:1,repository:$repository,host:$host,auth_kind:$auth_kind,expires_at:(if $expires_at == "" then null else $expires_at end),permissions:$permissions}' > "$metadata_tmp"
   mv "$metadata_tmp" "$auth_metadata_file"
   unset token GITHUB_TOKEN GH_TOKEN CODEX_GITHUB_TOKEN AGENT_APP_PRIVATE_KEY
 fi
@@ -523,10 +541,6 @@ git config --local user.name "${CODEX_GIT_AUTHOR_NAME:-codex-cloud}"
 git config --local user.email "${CODEX_GIT_AUTHOR_EMAIL:-codex-cloud@users.noreply.github.com}"
 
 gh api "repos/$repository" --jq '.full_name' | grep -Fqx "$repository"
-gh api "repos/$repository" --jq '.permissions.push == true' | grep -Fqx true || {
-  echo 'Authenticated GitHub credential does not have repository push permission.' >&2
-  exit 2
-}
 
 credential_file=$(mktemp)
 chmod 600 "$credential_file"
@@ -552,6 +566,18 @@ if [[ -f $auth_metadata_file ]]; then
     echo 'Persisted GitHub authentication metadata does not match this checkout.' >&2
     exit 2
   }
+  auth_kind=$(jq -r '.auth_kind // "unknown"' "$auth_metadata_file")
+  if [[ $auth_kind == github_app ]]; then
+    jq -e '.permissions.contents == "write" and .permissions.issues == "write" and .permissions.pull_requests == "write"' "$auth_metadata_file" >/dev/null || {
+      echo 'GitHub App installation token is missing required Contents, Issues, or Pull requests write permission.' >&2
+      exit 2
+    }
+  else
+    gh api "repos/$repository" --jq '.permissions.push == true' | grep -Fqx true || {
+      echo 'Authenticated user token does not have repository push permission.' >&2
+      exit 2
+    }
+  fi
   expires_at=$(jq -r '.expires_at // empty' "$auth_metadata_file")
   if [[ -n $expires_at ]]; then
     if expires_epoch=$(date -u -d "$expires_at" +%s 2>/dev/null); then

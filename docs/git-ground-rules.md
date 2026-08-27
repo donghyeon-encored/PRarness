@@ -32,9 +32,11 @@ The repository has two distinct execution modes:
 - Every Cloud task begins with the repository bootstrap. It creates or repairs
   the `origin` remote, authenticates `gh` non-interactively from the
   repository-scoped Cloud environment credential, selects the repository, and
-  verifies API push permission plus the Git HTTPS credential helper before
-  model work starts. A public `git ls-remote` success is never sufficient proof
-  of write access.
+  verifies the credential's own authorization source plus the Git HTTPS
+  credential helper before model work starts. For a GitHub App, the minted
+  installation-token response must grant Contents, Issues, and Pull requests
+  write; for a user token, repository `permissions.push` must be true. A public
+  `git ls-remote` success is never sufficient proof of write access.
 - Target repositories do not copy this pipeline, its prompts, schemas, or
   ground rules. They opt in through the protected `.github/prarness.yml`
   adapter and retain only repository-specific policy. The versioned central

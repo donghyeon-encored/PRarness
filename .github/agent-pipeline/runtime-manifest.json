@@ -4,7 +4,7 @@
   "files": [
     {
       "path": "cloud-github-setup.sh",
-      "sha256": "1539ae29f7a46d153476b4eade52cb495bbe50c95bfa6e184e7bc73e66e2db51",
+      "sha256": "9dcce3301d4cc8c07552dca115cea4eea347da2483fa749163436ae77456ae01",
       "executable": true
     },
     {

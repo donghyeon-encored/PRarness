@@ -67,9 +67,11 @@ procedure.
   and installs `prarness-github-setup`, `prarness-repository-check`, and
   `prarness-publish` outside the checkout. It detects the target repository,
   repairs `origin`, refreshes or loads the repository-scoped credential, and
-  verifies REST push permission plus the HTTPS Git credential helper without
-  an interactive login. A public `git ls-remote` result alone is not a write
-  check.
+  verifies App installation-token permissions (or user-token repository push
+  permission) plus the HTTPS Git credential helper without an interactive
+  login. Do not use a GitHub App's repository `permissions.push` field as the
+  App authorization test; App authorization comes from its installation/token
+  permissions. A public `git ls-remote` result alone is not a write check.
 - Commit a reviewed `.github/prarness.yml` in every target. Run
   `prarness-repository-check --repository OWNER/REPO` before model work and
   remove copied `.github/agent-pipeline/**`, copied PRarness ground rules, and
