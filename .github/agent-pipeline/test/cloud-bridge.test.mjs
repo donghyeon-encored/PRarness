@@ -33,26 +33,49 @@ const request = (overrides = {}) => ({
   ...overrides,
 });
 
+const implementationRequest = (overrides = {}) => {
+  const value = request({
+    request_id: "issue-1-implement-a1b2c3d4",
+    stage: "implement",
+    result_path: ".agent-cloud-output/issue-1-implement-a1b2c3d4/implement.json",
+    allowed_paths: ["src/fix.mjs"],
+    ...overrides,
+  });
+  value.publication_request = {
+    version: 1,
+    runtime_contract: 1,
+    request_id: value.request_id,
+    repository: value.repository,
+    issue: 1,
+    iteration: 1,
+    stage: "implement",
+    source_sha: value.source_sha,
+    subject_sha: value.subject_sha,
+    branch: "agent/issue-1-fix",
+    allowed_paths: value.allowed_paths,
+  };
+  return value;
+};
+
 test("validates a SHA-bound request and renders Cloud GitHub bootstrap/direct-write guidance", () => {
   assert.equal(validateCloudRequest(request()).stage, "triage");
   const query = buildCloudQuery(request());
-  assert.match(query, /\.local\/bin\/prarness-github-setup --verify owner\/repo/);
-  assert.match(query, /Direct GitHub work is an intended part/);
+  assert.match(query, /\.local\/bin\/prarness-repository-check --repository owner\/repo/);
+  assert.match(query, /\.local\/bin\/prarness-github-setup --verify-write owner\/repo/);
+  assert.match(query, /Direct scoped GitHub work is an intended part/);
   assert.match(query, /create or update the source Issue's canonical triage/);
   assert.doesNotMatch(query, /Do not use gh|Never commit, push/);
   assert.match(query, new RegExp("a{40}"));
 });
 
-test("implementation workers are told to own their branch, commit, draft PR, and comments", () => {
-  const implementation = request({
-    request_id: "issue-1-implement-a1b2c3d4",
-    stage: "implement",
-    result_path: ".agent-cloud-output/issue-1-implement-a1b2c3d4/implement.json",
-    allowed_paths: ["src/fix.mjs"],
-  });
+test("implementation workers are told to use verified managed publication", () => {
+  const implementation = implementationRequest();
   const query = buildCloudQuery(implementation);
-  assert.match(query, /create or reuse the managed agent\/issue-\* branch/);
-  assert.match(query, /create or update its draft PR/);
+  assert.match(query, /create or reuse the managed agent\/issue-\* branch/i);
+  assert.match(query, /use prarness-publish/);
+  assert.match(query, /verified PR URL and matching remote SHA/);
+  assert.match(query, /Exact publication request/);
+  assert.match(query, /--validation FILE/);
   assert.match(query, /Never force-push, merge or approve your own PR/);
 });
 
@@ -93,9 +116,7 @@ test("refuses ChatGPT-authenticated Cloud CLI execution inside GitHub Actions", 
 });
 
 test("binds sentinel results to stage, SHA, and allowed paths", () => {
-  const implementation = request({
-    request_id: "issue-1-implement-a1b2c3d4", stage: "implement",
-    result_path: ".agent-cloud-output/issue-1-implement-a1b2c3d4/implement.json",
+  const implementation = implementationRequest({
     allowed_paths: ["src/fix.mjs", "test/fix.test.mjs"],
   });
   const result = { version: 1, request_id: implementation.request_id, stage: "implement", source_sha: implementation.source_sha, subject_sha: implementation.subject_sha,
@@ -166,8 +187,8 @@ test("derives result and publication patch from the exact hashed diff", async ()
   await exec("git", ["config", "user.name", "Test"], { cwd: repo }); await exec("git", ["config", "user.email", "test@example.com"], { cwd: repo });
   await writeFile(join(repo, "src/fix.mjs"), "old\n"); await exec("git", ["add", "src/fix.mjs"], { cwd: repo }); await exec("git", ["commit", "-qm", "base"], { cwd: repo });
   const sha = (await exec("git", ["rev-parse", "HEAD"], { cwd: repo })).stdout.trim();
-  const bound = request({ request_id: "issue-1-implement-d4c3b2a1", stage: "implement", source_sha: sha, subject_sha: sha,
-    result_path: ".agent-cloud-output/issue-1-implement-d4c3b2a1/implement.json", allowed_paths: ["src/fix.mjs"] });
+  const bound = implementationRequest({ request_id: "issue-1-implement-d4c3b2a1", source_sha: sha, subject_sha: sha,
+    result_path: ".agent-cloud-output/issue-1-implement-d4c3b2a1/implement.json" });
   await writeFile(join(repo, "src/fix.mjs"), "new\n"); await mkdir(join(repo, ".agent-cloud-output/issue-1-implement-d4c3b2a1"), { recursive: true });
   await writeFile(join(repo, bound.result_path), `${JSON.stringify({ version: 1, request_id: bound.request_id, stage: bound.stage, source_sha: sha, subject_sha: sha, observed_sha: sha, attempt: 1, payload: { summary: "fixed" } })}\n`);
   await exec("git", ["add", "-N", "src/fix.mjs", bound.result_path], { cwd: repo });

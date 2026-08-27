@@ -34,9 +34,11 @@ procedure.
   active, assignable collaborators.
 - Confirm branch protection, Actions permissions, and CODEOWNERS coverage meet
   `docs/git-ground-rules.md`.
-- Install a repository-scoped GitHub App with Contents, Issues, Pull requests,
-  Actions, and Workflows write permission, or create an equivalently scoped
-  fine-grained token for the Codex Cloud worker.
+- Install a repository-scoped GitHub App with Contents, Issues, and Pull
+  requests write permission, or create an equivalently scoped fine-grained
+  token for the Codex Cloud worker. Add Workflows write only to a separately
+  authorized interactive workflow-maintenance environment; ordinary Issue work
+  does not need it.
 - Add `AGENT_APP_ID` as a repository variable.
 - Add `AGENT_APP_PRIVATE_KEY` as a repository secret. Never place its value in
   this checkout or expose it to the external relay. Its value must be the full
@@ -61,10 +63,20 @@ procedure.
   never hard-code a target repository in the setup script.
 - Configure both the Cloud setup script and maintenance script with the same
   SHA-pinned, repository-independent installer from
-  `docs/codex-cloud-migration.md`. It installs
-  `$HOME/.local/bin/prarness-github-setup`, detects the target repository,
-  repairs `origin`, mints or loads the repository-scoped credential, selects
-  the default repo, and verifies Git/API access without an interactive login.
+  `docs/codex-cloud-migration.md`. It checksum-verifies the full central runtime
+  and installs `prarness-github-setup`, `prarness-repository-check`, and
+  `prarness-publish` outside the checkout. It detects the target repository,
+  repairs `origin`, refreshes or loads the repository-scoped credential, and
+  verifies REST push permission plus the HTTPS Git credential helper without
+  an interactive login. A public `git ls-remote` result alone is not a write
+  check.
+- Commit a reviewed `.github/prarness.yml` in every target. Run
+  `prarness-repository-check --repository OWNER/REPO` before model work and
+  remove copied `.github/agent-pipeline/**`, copied PRarness ground rules, and
+  legacy instructions that prohibit the Cloud worker's scoped GitHub writes.
+- Do not remove the target's current event trigger until the central reusable
+  controller or GitHub App webhook controller and its signed result mailbox are
+  deployed. The runtime installer alone does not dispatch Cloud work.
 - Run `npm ci --ignore-scripts`, `npm run lint`, and `npm test` on the exact
   source snapshot that will be published.
 - Confirm that the credential-isolated `Pull request validation` check runs on

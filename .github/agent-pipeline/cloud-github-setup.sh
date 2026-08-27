@@ -5,10 +5,12 @@ set +x
 umask 077
 
 mode=configure
-if [[ ${1:-} == "--verify" ]]; then
-  mode=verify
-  shift
-fi
+case ${1:-} in
+  --verify|--verify-write)
+    mode=verify
+    shift
+    ;;
+esac
 
 server_url=${CODEX_GITHUB_SERVER_URL:-https://github.com}
 host=${server_url#https://}
@@ -447,9 +449,13 @@ mint_installation_token() {
   fi
 
   local request_body response
-  request_body=$(jq -cn --arg repo "$repo_name" '{repositories:[$repo],permissions:{actions:"write",contents:"write",issues:"write",pull_requests:"write",workflows:"write"}}')
+  if [[ ${PRARNESS_GITHUB_WORKFLOW_MAINTENANCE:-false} == true ]]; then
+    request_body=$(jq -cn --arg repo "$repo_name" '{repositories:[$repo],permissions:{contents:"write",issues:"write",pull_requests:"write",workflows:"write"}}')
+  else
+    request_body=$(jq -cn --arg repo "$repo_name" '{repositories:[$repo],permissions:{contents:"write",issues:"write",pull_requests:"write"}}')
+  fi
   response=$(github_api_post "$jwt" "$request_body" "${api_url}/app/installations/${installation_id}/access_tokens")
-  printf '%s' "$response" | jq -er '.token'
+  printf '%s' "$response" | jq -e '{token:(.token | select(type == "string" and length > 0)),expires_at:(.expires_at // null)}'
 }
 
 configure_gh_default_repository() {
@@ -461,21 +467,32 @@ configure_gh_default_repository() {
   git config --local --add remote.origin.gh-resolved base
 }
 
+config_dir=${GH_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/gh}
+auth_metadata_file="$config_dir/prarness-auth.json"
+
 if [[ $mode == configure ]]; then
   token=${CODEX_GITHUB_TOKEN:-${GH_TOKEN:-${GITHUB_TOKEN:-}}}
-  if [[ -z $token ]]; then
-    if gh api "repos/$repository" --silent >/dev/null 2>&1; then
-      token=''
-    else
-      token=$(mint_installation_token) || {
-        echo 'Configure CODEX_GITHUB_TOKEN or AGENT_APP_ID/AGENT_APP_PRIVATE_KEY in the Codex Cloud environment.' >&2
-        exit 2
-      }
+  expires_at=''
+  if [[ -n ${AGENT_APP_ID:-} || -n ${AGENT_APP_PRIVATE_KEY:-} ]]; then
+    if [[ -z ${AGENT_APP_ID:-} || -z ${AGENT_APP_PRIVATE_KEY:-} ]]; then
+      echo 'GitHub App authentication requires both AGENT_APP_ID and AGENT_APP_PRIVATE_KEY.' >&2
+      exit 2
+    fi
+    credential_response=$(mint_installation_token) || {
+      echo 'Configure CODEX_GITHUB_TOKEN or valid AGENT_APP_ID/AGENT_APP_PRIVATE_KEY in the Codex Cloud environment.' >&2
+      exit 2
+    }
+    token=$(printf '%s' "$credential_response" | jq -er '.token')
+    expires_at=$(printf '%s' "$credential_response" | jq -r '.expires_at // empty')
+    unset credential_response
+  elif [[ -z $token ]]; then
+    if ! gh api "repos/$repository" --silent >/dev/null 2>&1; then
+      echo 'Configure CODEX_GITHUB_TOKEN or AGENT_APP_ID/AGENT_APP_PRIVATE_KEY in the Codex Cloud environment.' >&2
+      exit 2
     fi
   fi
 
   if [[ -n $token ]]; then
-    config_dir=${GH_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/gh}
     mkdir -p "$config_dir"
     chmod 700 "$config_dir"
     hosts_file="$config_dir/hosts.yml"
@@ -489,6 +506,13 @@ if [[ $mode == configure ]]; then
     } > "$hosts_tmp"
     mv "$hosts_tmp" "$hosts_file"
   fi
+  mkdir -p "$config_dir"
+  chmod 700 "$config_dir"
+  metadata_tmp=$(mktemp "$config_dir/prarness-auth.json.XXXXXX")
+  chmod 600 "$metadata_tmp"
+  jq -cn --arg repository "$repository" --arg host "$host" --arg expires_at "$expires_at" \
+    '{version:1,repository:$repository,host:$host,expires_at:(if $expires_at == "" then null else $expires_at end)}' > "$metadata_tmp"
+  mv "$metadata_tmp" "$auth_metadata_file"
   unset token GITHUB_TOKEN GH_TOKEN CODEX_GITHUB_TOKEN AGENT_APP_PRIVATE_KEY
 fi
 
@@ -499,7 +523,53 @@ git config --local user.name "${CODEX_GIT_AUTHOR_NAME:-codex-cloud}"
 git config --local user.email "${CODEX_GIT_AUTHOR_EMAIL:-codex-cloud@users.noreply.github.com}"
 
 gh api "repos/$repository" --jq '.full_name' | grep -Fqx "$repository"
+gh api "repos/$repository" --jq '.permissions.push == true' | grep -Fqx true || {
+  echo 'Authenticated GitHub credential does not have repository push permission.' >&2
+  exit 2
+}
+
+credential_file=$(mktemp)
+chmod 600 "$credential_file"
+cleanup_credential_file() {
+  rm -f "$credential_file"
+}
+trap cleanup_credential_file EXIT
+if ! printf 'protocol=https\nhost=%s\n\n' "$host" | GIT_TERMINAL_PROMPT=0 git credential fill > "$credential_file" 2>/dev/null; then
+  echo 'Git credential helper could not provide GitHub HTTPS credentials.' >&2
+  exit 2
+fi
+grep -Fqx 'username=x-access-token' "$credential_file" && grep -Eq '^password=.+$' "$credential_file" || {
+  echo 'Git credential helper returned incomplete GitHub HTTPS credentials.' >&2
+  exit 2
+}
+cleanup_credential_file
+trap - EXIT
+
+if [[ -f $auth_metadata_file ]]; then
+  metadata_repository=$(jq -er '.repository' "$auth_metadata_file") || exit 2
+  metadata_host=$(jq -er '.host' "$auth_metadata_file") || exit 2
+  [[ $metadata_repository == "$repository" && $metadata_host == "$host" ]] || {
+    echo 'Persisted GitHub authentication metadata does not match this checkout.' >&2
+    exit 2
+  }
+  expires_at=$(jq -r '.expires_at // empty' "$auth_metadata_file")
+  if [[ -n $expires_at ]]; then
+    if expires_epoch=$(date -u -d "$expires_at" +%s 2>/dev/null); then
+      :
+    elif expires_epoch=$(date -j -u -f '%Y-%m-%dT%H:%M:%SZ' "$expires_at" +%s 2>/dev/null); then
+      :
+    else
+      echo 'Persisted GitHub credential expiration is invalid.' >&2
+      exit 2
+    fi
+    now_epoch=$(date +%s)
+    if (( expires_epoch - now_epoch < 300 )); then
+      echo 'Persisted GitHub credential expires too soon for publication; rerun Cloud setup or maintenance.' >&2
+      exit 2
+    fi
+  fi
+fi
 configure_gh_default_repository
 git ls-remote --exit-code origin HEAD >/dev/null
 
-echo "Codex Cloud GitHub access ready: origin -> $remote_url; gh -> $repository"
+echo "Codex Cloud GitHub write access ready: origin -> $remote_url; gh -> $repository"

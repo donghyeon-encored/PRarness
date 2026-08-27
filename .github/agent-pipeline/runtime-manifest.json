@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "runtime_contract": 1,
+  "files": [
+    {
+      "path": "cloud-github-setup.sh",
+      "sha256": "1539ae29f7a46d153476b4eade52cb495bbe50c95bfa6e184e7bc73e66e2db51",
+      "executable": true
+    },
+    {
+      "path": "repository-check.mjs",
+      "sha256": "70cb53555baedb45287d0a01d65d0d6b85241ece3c3506af3988f83fc238e53e",
+      "executable": true
+    },
+    {
+      "path": "cloud-publish.mjs",
+      "sha256": "80a48459aab9672fe829de7e3a2741481f0eea5d143fc97f88d6a9534116a50f",
+      "executable": true
+    },
+    {
+      "path": "pipeline.mjs",
+      "sha256": "80957916ff4b195635e3437723ce05fc4d1a023b68efd15aa7887a9db6f1a44f",
+      "executable": false
+    }
+  ]
+}

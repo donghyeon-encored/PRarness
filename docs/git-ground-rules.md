@@ -32,7 +32,15 @@ The repository has two distinct execution modes:
 - Every Cloud task begins with the repository bootstrap. It creates or repairs
   the `origin` remote, authenticates `gh` non-interactively from the
   repository-scoped Cloud environment credential, selects the repository, and
-  verifies both API and Git access before model work starts.
+  verifies API push permission plus the Git HTTPS credential helper before
+  model work starts. A public `git ls-remote` success is never sufficient proof
+  of write access.
+- Target repositories do not copy this pipeline, its prompts, schemas, or
+  ground rules. They opt in through the protected `.github/prarness.yml`
+  adapter and retain only repository-specific policy. The versioned central
+  runtime is checksum-verified and installed outside the checkout during Cloud
+  setup/maintenance. A legacy or conflicting repository instruction fails
+  before model work and is never overridden by the Cloud prompt.
 - In interactive maintenance mode, Codex may edit protected files and use the
   user's already-authorized GitHub connection to create or reuse a
   `codex/maintenance-*` branch, commit, push, open or update a draft pull
@@ -47,8 +55,11 @@ The repository has two distinct execution modes:
   exporting their underlying credential. GitHub writes must remain limited to
   the source Issue and its policy-derived managed branch/PR.
 - For code-bearing publication, the Cloud agent runs required validation and
-  protected-path checks before committing or pushing. Intake, plan, and review
-  comments may be updated as soon as their stage output is complete.
+  protected-path checks before committing or pushing. It must use the
+  SHA-bound `prarness-publish` command and may report success only after the
+  remote branch SHA and live pull-request head match its local commit. Intake,
+  plan, and review comments may be updated as soon as their stage output is
+  complete.
 - Never use `pull_request_target` for this pipeline. Never run a write-capable
   job for a fork pull request.
 - Ignore comments authored by the automation itself. Intake approval and resume
@@ -171,6 +182,9 @@ Agent-Iteration: 2
   the user's direct request authorizes editing and draft publication; final
   content approval occurs on the pull request rather than through a synthetic
   Issue.
+- `.github/prarness.yml` is always protected because it authorizes publication,
+  validation commands, and additional protected paths. Automated Issue mode
+  cannot edit it.
 
 ### Deterministic protected-path authorization
 

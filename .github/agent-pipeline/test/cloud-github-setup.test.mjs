@@ -32,14 +32,22 @@ exec ${JSON.stringify(realGit)} "$@"
   await writeFile(join(bin, "gh"), `#!/usr/bin/env bash
 if [[ $1 == api ]]; then
   [[ -f "$HOME/.config/gh/hosts.yml" ]] || exit 1
-  printf '%s\\n' "$TEST_REPOSITORY"
+  if [[ $* == *'.permissions.push == true'* ]]; then
+    printf '%s\\n' "\${TEST_PUSH_PERMISSION:-true}"
+  else
+    printf '%s\\n' "$TEST_REPOSITORY"
+  fi
   exit 0
 fi
 if [[ $1 == repo && $2 == set-default ]]; then
   printf '%s\\n' 'HTTP 401: Requires authentication (https://api.github.com/graphql)' >&2
   exit 1
 fi
-if [[ $1 == auth && $2 == git-credential ]]; then exit 0; fi
+if [[ $1 == auth && $2 == git-credential ]]; then
+  [[ \${TEST_GIT_CREDENTIAL_COMPLETE:-true} == true ]] || exit 0
+  printf '%s\\n' 'protocol=https' 'host=github.com' 'username=x-access-token' 'password=test-credential'
+  exit 0
+fi
 exit 7
 `);
   await chmod(join(bin, "git"), 0o755); await chmod(join(bin, "gh"), 0o755);
@@ -86,10 +94,10 @@ if [[ $url == */installation ]]; then
   exit 0
 fi
 if [[ $url == */app/installations/*/access_tokens ]]; then
-  if [[ $* == *'actions":"write'* ]]; then
-    printf '%s' '{"token":"github_app_write_token"}'
+  if [[ $* == *'contents":"write'* ]]; then
+    printf '%s' '{"token":"github_app_write_token","expires_at":"2099-01-01T00:00:00Z"}'
   else
-    printf '%s' '{"token":"github_app_discovery_token"}'
+    printf '%s' '{"token":"github_app_discovery_token","expires_at":"2099-01-01T00:00:00Z"}'
   fi
   exit 0
 fi
@@ -113,12 +121,14 @@ async function assertConfigured(context, repository, token = "github_pat_test_to
   assert.equal(resolution.stdout.trim(), "remote.origin.gh-resolved base");
   const hosts = await readFile(join(context.home, ".config/gh/hosts.yml"), "utf8");
   assert.match(hosts, new RegExp(`oauth_token: ${token}`));
+  const metadata = JSON.parse(await readFile(join(context.home, ".config/gh/prarness-auth.json"), "utf8"));
+  assert.equal(metadata.repository, repository);
 }
 
 test("Cloud setup accepts an explicit repository and persists non-interactive gh authentication", async () => {
   const context = await harness("owner/repo");
   const result = await exec("bash", [setup, "owner/repo"], { cwd: context.repo, env: context.env });
-  assert.match(result.stdout, /GitHub access ready/);
+  assert.match(result.stdout, /GitHub write access ready/);
   await assertConfigured(context, "owner/repo");
   await exec("bash", [setup, "--verify", "owner/repo"], { cwd: context.repo, env: context.env });
 });
@@ -247,5 +257,23 @@ test("Cloud setup fails closed when no repository identity is available", async 
   await assert.rejects(
     exec("bash", [setup], { cwd: context.repo, env: context.env }),
     (error) => error.code === 2 && /Unable to identify the Cloud checkout/.test(error.stderr),
+  );
+});
+
+test("Cloud write verification rejects a credential helper that supplies no password", async () => {
+  const context = await harness("owner/repo");
+  context.env.TEST_GIT_CREDENTIAL_COMPLETE = "false";
+  await assert.rejects(
+    exec("bash", [setup, "owner/repo"], { cwd: context.repo, env: context.env }),
+    (error) => error.code === 2 && /(?:could not provide|incomplete) GitHub HTTPS credentials/.test(error.stderr),
+  );
+});
+
+test("Cloud write verification rejects repository read access without push permission", async () => {
+  const context = await harness("owner/repo");
+  context.env.TEST_PUSH_PERMISSION = "false";
+  await assert.rejects(
+    exec("bash", [setup, "owner/repo"], { cwd: context.repo, env: context.env }),
+    (error) => error.code === 2 && /does not have repository push permission/.test(error.stderr),
   );
 });

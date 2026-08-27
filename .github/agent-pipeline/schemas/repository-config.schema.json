@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "runtime", "publication", "validation"],
+  "properties": {
+    "version": { "const": 1 },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract"],
+      "properties": { "contract": { "const": 1 } }
+    },
+    "publication": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "branch_prefix"],
+      "properties": {
+        "mode": { "const": "codex_cloud_direct" },
+        "branch_prefix": { "const": "agent/issue-" }
+      }
+    },
+    "ownership": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "fallback"],
+      "properties": {
+        "source": { "enum": ["codeowners", "config"] },
+        "fallback": { "type": "string", "pattern": "^[A-Za-z0-9-]+$" }
+      }
+    },
+    "validation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["commands"],
+      "properties": {
+        "commands": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } }
+      }
+    },
+    "protected_paths": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["additional"],
+      "properties": {
+        "additional": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+      }
+    }
+  }
+}

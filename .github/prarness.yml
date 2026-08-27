@@ -1,0 +1,21 @@
+version: 1
+
+runtime:
+  contract: 1
+
+publication:
+  mode: codex_cloud_direct
+  branch_prefix: agent/issue-
+
+ownership:
+  source: codeowners
+  fallback: donghyeon-encored
+
+validation:
+  commands:
+    - npm run lint
+    - npm test
+
+protected_paths:
+  additional:
+    - infra/production/**

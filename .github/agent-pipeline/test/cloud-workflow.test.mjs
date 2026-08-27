@@ -40,6 +40,8 @@ test("Cloud workers bootstrap GitHub and are encouraged to own scoped writes", a
   const bridge = await readFile(new URL("../cloud-bridge.mjs", import.meta.url), "utf8");
   const installer = await readFile(new URL("../cloud-environment-bootstrap.sh", import.meta.url), "utf8");
   const setup = await readFile(new URL("../cloud-github-setup.sh", import.meta.url), "utf8");
+  const compatibility = await readFile(new URL("../repository-check.mjs", import.meta.url), "utf8");
+  const cloudPublisher = await readFile(new URL("../cloud-publish.mjs", import.meta.url), "utf8");
   const prompts = await Promise.all(["triage", "diagnose-plan", "implement", "review"].map((name) =>
     readFile(new URL(`../prompts/${name}.md`, import.meta.url), "utf8")));
 
@@ -47,18 +49,28 @@ test("Cloud workers bootstrap GitHub and are encouraged to own scoped writes", a
   assert.match(policy, /creates or repairs\s+the `origin` remote/);
   assert.match(agents, /Cloud workers are expected to manage the source Issue/);
   assert.doesNotMatch([policy, agents, bridge, ...prompts].join("\n"), /Only a deterministic publisher|Do not use gh|must not receive a GitHub write credential|deterministic publisher owns all GitHub writes/i);
-  assert.match(bridge, /\.local\/bin\/prarness-github-setup --verify/);
+  assert.match(bridge, /\.local\/bin\/prarness-repository-check --repository/);
+  assert.match(bridge, /\.local\/bin\/prarness-github-setup --verify-write/);
   assert.match(installer, /PRARNESS_BOOTSTRAP_REF/);
   assert.match(installer, /40-character commit SHA/);
+  assert.match(installer, /runtime-manifest\.json/);
+  assert.match(installer, /checksum failed/);
   assert.match(setup, /git remote add origin/);
   assert.match(setup, /CODEX_GITHUB_REPOSITORY/);
   assert.match(setup, /\/app\/installations\?per_page=/);
   assert.match(setup, /\/installation\/repositories\?per_page=/);
   assert.match(setup, /\/git\/commits\/\$\{local_head\}/);
   assert.match(setup, /multiple repositories containing the checkout HEAD/);
-  assert.match(setup, /workflows:\"write\"/);
+  assert.match(setup, /contents:\"write\",issues:\"write\",pull_requests:\"write\"/);
+  assert.match(setup, /PRARNESS_GITHUB_WORKFLOW_MAINTENANCE/);
   assert.match(setup, /oauth_token/);
+  assert.match(setup, /git credential fill/);
+  assert.match(setup, /\.permissions\.push == true/);
   assert.match(setup, /remote\.origin\.gh-resolved base/);
   assert.doesNotMatch(setup, /gh repo set-default/);
   assert.match(setup, /git ls-remote --exit-code origin HEAD/);
+  assert.match(compatibility, /LEGACY_PUBLICATION_POLICY/);
+  assert.match(compatibility, /codex_cloud_direct/);
+  assert.match(cloudPublisher, /REMOTE_SHA_MISMATCH/);
+  assert.match(cloudPublisher, /PR_HEAD_MISMATCH/);
 });

@@ -89,6 +89,7 @@ pipeline:
   protected_paths:
     - ".github/workflows/**"
     - ".github/agent-pipeline/**"
+    - ".github/prarness.yml"
     - "CODEOWNERS"
     - "docs/git-ground-rules.md"
     - "**/AGENTS.md"

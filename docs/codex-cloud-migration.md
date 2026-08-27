@@ -5,7 +5,7 @@ The public-repository boundary is intentionally staged:
 ```text
 GitHub-hosted gate → SHA-bound Cloud request → audit artifact → fail closed
                                            ↘ trusted local relay → Codex Cloud
-                                             ↘ authenticated git/gh → GitHub
+                                             ↘ verified REST/git → GitHub
                                              (result return channel not connected)
 ```
 
@@ -32,21 +32,21 @@ environment. The bridge therefore rejects Cloud CLI calls when
 The external relay receives no GitHub credential. The Codex Cloud environment
 does: its setup/maintenance bootstrap uses either `CODEX_GITHUB_TOKEN` or the
 repository GitHub App credentials to configure `origin` and persist
-non-interactive `gh` access inside the task container. The Cloud model is
-expected to use that scoped access for the source Issue, canonical comments,
-managed branch, commits, draft PR, and review comments. It must not print or
-extract the credential, force-push, self-approve, or merge.
+non-interactive `gh` access inside the task container. The Cloud worker uses
+that scoped access for the source Issue, canonical comments, managed branch,
+commits, draft PR, and review comments. It must not print or extract the
+credential, force-push, self-approve, or merge.
 
 Interactive maintenance is a separate user-authorized path. It uses a
 `codex/maintenance-*` draft PR by default, but an explicit instruction to
 publish to the default branch permits one validated fast-forward commit after
 the live head is rechecked.
 
-OpenAI's documented Codex Cloud setup requires a ChatGPT sign-in, a connected
-GitHub repository, and a configured Cloud environment. This relay never opens
-that setup flow: it reuses an already-existing local session and fails closed
-if the session or environment is unavailable. See
-https://learn.chatgpt.com/docs/cloud.
+Codex Cloud checks out the repository before running setup; cached environments
+run maintenance instead, and environment secrets are removed before the agent
+phase. Configure the same loader in both phases so a resumed container replaces
+an expired GitHub App installation token before work starts. See the official
+[Codex Cloud environment documentation](https://learn.chatgpt.com/docs/environments/cloud-environment).
 
 ## External relay prerequisites
 
@@ -83,8 +83,13 @@ https://learn.chatgpt.com/docs/cloud.
      | PRARNESS_BOOTSTRAP_REF="$prarness_ref" bash
    ```
 
-   The loader installs `$HOME/.local/bin/prarness-github-setup`; it resolves the
-   target from an explicit argument, `CODEX_GITHUB_REPOSITORY`,
+   The loader downloads `runtime-manifest.json`, verifies every listed SHA-256,
+   and installs the reviewed runtime under
+   `$HOME/.local/share/prarness/<commit-sha>/`. It exposes
+   `$HOME/.local/bin/prarness-github-setup`,
+   `$HOME/.local/bin/prarness-repository-check`, and
+   `$HOME/.local/bin/prarness-publish`. It resolves the target from an explicit
+   argument, `CODEX_GITHUB_REPOSITORY`,
    `GITHUB_REPOSITORY`, or exactly one parseable GitHub remote, in that order.
    With none of those available, it lists repositories accessible to the
    configured token or GitHub App and selects the only repository containing
@@ -94,8 +99,11 @@ https://learn.chatgpt.com/docs/cloud.
    safety limit to at most 5,000 for a large installation.
 
    Every fresh or resumed container repairs `origin`, refreshes authentication,
-   and verifies `gh` plus Git access before the agent phase. After a successful
-   REST repository check, it records `origin` as the local `gh` default without
+   and verifies authenticated REST push permission plus a non-empty HTTPS Git
+   credential before the agent phase. `git ls-remote` remains a supplemental
+   connectivity check because a public repository can pass it anonymously.
+   After a successful REST repository check, it records `origin` as the local
+   `gh` default without
    invoking `gh repo set-default`; that command performs an additional GraphQL
    repository-network query that can reject an otherwise valid GitHub App
    installation token. Target repositories do not need to copy
@@ -112,6 +120,29 @@ all model stages to `codex_cloud` and disables API-billing fallback.
 
 The CLI cannot create Cloud environments. If no suitable environment already
 exists, execution remains blocked and nobody is prompted to log in.
+
+## Target repository contract
+
+Each target explicitly opts in with a protected `.github/prarness.yml`. It
+contains only the runtime contract, direct-publication mode, managed branch
+prefix, repository validation commands, ownership fallback, and additional
+protected paths. It does not copy PRarness prompts, schemas, scripts, tests, or
+central ground rules. See `docs/target-adoption.md` for the file shape and
+migration sequence.
+
+Before any model work, run:
+
+```bash
+prarness-repository-check --repository OWNER/REPO
+prarness-github-setup --verify-write OWNER/REPO
+```
+
+The first command fails `LEGACY_PUBLICATION_POLICY` when a tracked repository
+instruction still says that the Cloud worker cannot perform its scoped GitHub
+writes. This is a migration error, not permission for the Cloud prompt to
+override repository instructions. The second command fails before source edits
+if the repository, App permission, credential helper, or token lifetime is not
+safe for publication.
 
 ## Request and result contract
 
@@ -131,6 +162,33 @@ while bounding unusually large issue bodies and long-line patches.
 Submissions use one attempt and are never retried after an ambiguous response.
 Unknown status, timeout, identity mismatch, secret-like context, moving SHA,
 unexpected file mode/path, or result mismatch fails closed.
+
+Code publication also uses a strict request file. After the implementation has
+exactly one commit, the worker runs:
+
+```bash
+prarness-publish \
+  --request "$REQUEST_JSON" \
+  --validation "$VALIDATION_JSON" \
+  --result "$RESULT_JSON" \
+  --repo "$PWD"
+```
+
+The command rechecks target opt-in, origin identity, source ancestry, commit
+count, allowed paths, protected paths, the 400-line ceiling, a clean worktree,
+and ordered pass evidence for every configured validation command. It does not
+execute target validation code while publishing. It pushes only the managed
+`agent/issue-*` branch; finds or creates the draft PR through REST; updates
+canonical state; and then reads the remote branch and live PR again. Only a
+result with `verified: true`, an exact remote SHA, and a GitHub PR URL is a
+successful publication. Preparing PR metadata or creating only a local branch
+is not success.
+
+Runtime contract 1 deliberately fails closed for every protected path. It does
+not yet carry the source-Issue marker and independent human-approval evidence
+needed to authorize a non-workflow protected change. Such work remains on the
+reviewed controller/human path; interactive maintenance is the supported path
+for workflow and `.github/prarness.yml` changes.
 
 The external relay signs a compact result receipt with an Ed25519 key that is
 kept outside Actions. The receipt binds the request nonce, stage, source and

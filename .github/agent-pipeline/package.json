@@ -7,7 +7,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "lint": "node --check pipeline.mjs && node --check cloud-bridge.mjs && bash -n cloud-github-setup.sh && bash -n cloud-environment-bootstrap.sh",
+    "lint": "node --check pipeline.mjs && node --check cloud-bridge.mjs && node --check repository-check.mjs && node --check cloud-publish.mjs && bash -n cloud-github-setup.sh && bash -n cloud-environment-bootstrap.sh",
     "test": "node --test test/*.test.mjs"
   }
 }

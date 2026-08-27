@@ -1468,6 +1468,21 @@ test("controller builds a stage and SHA-bound Cloud request", () => {
   assert.match(request.instructions, /Trusted deterministic policy projection/);
   assert.match(request.instructions, /npm run lint/);
   assert.match(request.instructions, /platform-maintainer/);
+
+  const implementOutput = join(directory, "implement-request.json");
+  const allowedPaths = join(directory, "allowed-paths.json");
+  writeFileSync(context, JSON.stringify({ issue: { number: 1 }, state: { branch: "agent/issue-1-fix", iteration: 2 }, plan: {} }));
+  writeFileSync(allowedPaths, JSON.stringify({ changed_paths: ["src/fix.mjs"] }));
+  execFileSync(process.execPath, [pipelinePath, "build-cloud-request", "--stage", "implement",
+    "--team", fileURLToPath(new URL("../team.yaml", import.meta.url)),
+    "--request-id", "gh-12345678-implement", "--repository", "owner/repo", "--environment", "env_12345678",
+    "--cli-version", "0.145.0", "--source-sha", "a".repeat(40), "--subject-sha", "a".repeat(40),
+    "--prompt", prompt, "--schema", schema, "--context", context, "--allowed-paths", allowedPaths, "--output", implementOutput]);
+  const implementation = JSON.parse(readFileSync(implementOutput, "utf8"));
+  assert.equal(implementation.publication_request.issue, 1);
+  assert.equal(implementation.publication_request.iteration, 2);
+  assert.equal(implementation.publication_request.branch, "agent/issue-1-fix");
+  assert.deepEqual(implementation.publication_request.allowed_paths, ["src/fix.mjs"]);
 });
 
 test("Cloud policy projection contains routing and review policy but no runtime credentials", () => {

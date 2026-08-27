@@ -2585,17 +2585,9 @@ async function publishPr(client, input) {
   const live = await validateLivePublication(client, { ...input, state, branch });
   let pr = live.pull;
   const reused = Boolean(pr);
-  if (pr && pr.draft !== true) {
-    invariant(pr.node_id, "GitHub did not return the PR node id", "GITHUB_API_ERROR");
-    const converted = await client.request("POST", client.graphqlUrl, {
-      body: {
-        query: "mutation ConvertToDraft($id: ID!) { convertPullRequestToDraft(input: {pullRequestId: $id}) { pullRequest { number isDraft } } }",
-        variables: { id: pr.node_id },
-      },
-    });
-    invariant(!converted.data?.errors?.length, `GitHub GraphQL draft transition failed: ${converted.data?.errors?.[0]?.message ?? "unknown error"}`, "GITHUB_API_ERROR");
-    pr = { ...pr, draft: true };
-  }
+  // A later human or review stage may already have marked a reused PR ready.
+  // Implementation publication updates that exact PR but never mutates its
+  // draft lifecycle through a GraphQL-only transition.
   const repo = resolve(input.repo ?? ".");
   const worktreePaths = gitStatusPaths(repo);
   const declaredPaths = readPaths(input.changed_paths);
@@ -3274,6 +3266,8 @@ export async function runCli(argv = process.argv.slice(2)) {
     const requestId = requiredArg(args, "request_id");
     const prompt = rawInput(requiredArg(args, "prompt"), "--prompt");
     const policy = cloudPolicyProjection(loadTeam(teamPath));
+    const context = readJsonish(requiredArg(args, "context"), "--context");
+    const allowedPaths = args.allowed_paths ? readPaths(args.allowed_paths) : [];
     const request = {
       version: 1,
       request_id: requestId,
@@ -3285,11 +3279,30 @@ export async function runCli(argv = process.argv.slice(2)) {
       attempts: 1,
       expected_cli_version: requiredArg(args, "cli_version"),
       result_path: `.agent-cloud-output/${requestId}/${stage}.json`,
-      allowed_paths: args.allowed_paths ? readPaths(args.allowed_paths) : [],
+      allowed_paths: allowedPaths,
       instructions: `${prompt}\n\n## Trusted deterministic policy projection\n\n${JSON.stringify(policy)}`,
-      context: readJsonish(requiredArg(args, "context"), "--context"),
+      context,
       payload_schema: readJsonish(requiredArg(args, "schema"), "--schema"),
     };
+    if (stage === "implement") {
+      const issue = asInteger(context.issue?.number, 0);
+      const iteration = asInteger(context.state?.iteration ?? context.plan?.iteration, 0);
+      const branch = String(context.state?.branch ?? context.plan?.branch ?? "");
+      invariant(issue > 0 && iteration > 0 && branch.startsWith(`agent/issue-${issue}-`), "Implementation context must contain its source Issue, iteration, and managed branch", "INVALID_PUBLICATION_REQUEST");
+      request.publication_request = {
+        version: 1,
+        runtime_contract: 1,
+        request_id: requestId,
+        repository: request.repository,
+        issue,
+        iteration,
+        stage: "implement",
+        source_sha: request.source_sha,
+        subject_sha: request.subject_sha,
+        branch,
+        allowed_paths: allowedPaths,
+      };
+    }
     return emit(validateCloudRequest(request), args);
   }
   if (command === "gate-event" || command === "gate") {
