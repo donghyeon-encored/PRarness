@@ -520,6 +520,9 @@ if [[ $mode == configure ]]; then
       printf '    user: x-access-token\n'
       printf '    oauth_token: %s\n' "$token"
       printf '    git_protocol: https\n'
+      printf '    users:\n'
+      printf '        x-access-token:\n'
+      printf '            oauth_token: %s\n' "$token"
     } > "$hosts_tmp"
     mv "$hosts_tmp" "$hosts_file"
   fi
@@ -537,6 +540,15 @@ fi
 git config --local --unset-all credential."https://${host}".helper >/dev/null 2>&1 || true
 git config --local --add credential."https://${host}".helper ''
 git config --local --add credential."https://${host}".helper '!gh auth git-credential'
+credential_username=x-access-token
+if [[ -f $auth_metadata_file ]] && [[ $(jq -r '.auth_kind // "unknown"' "$auth_metadata_file") == existing ]]; then
+  credential_username=$(gh api user --jq '.login')
+  if [[ ! $credential_username =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,38}$ ]]; then
+    echo 'Existing GitHub CLI authentication returned an invalid username.' >&2
+    exit 2
+  fi
+fi
+git config --local credential."https://${host}".username "$credential_username"
 git config --local user.name "${CODEX_GIT_AUTHOR_NAME:-codex-cloud}"
 git config --local user.email "${CODEX_GIT_AUTHOR_EMAIL:-codex-cloud@users.noreply.github.com}"
 
@@ -552,7 +564,7 @@ if ! printf 'protocol=https\nhost=%s\n\n' "$host" | GIT_TERMINAL_PROMPT=0 git cr
   echo 'Git credential helper could not provide GitHub HTTPS credentials.' >&2
   exit 2
 fi
-grep -Fqx 'username=x-access-token' "$credential_file" && grep -Eq '^password=.+$' "$credential_file" || {
+grep -Fqx "username=$credential_username" "$credential_file" && grep -Eq '^password=.+$' "$credential_file" || {
   echo 'Git credential helper returned incomplete GitHub HTTPS credentials.' >&2
   exit 2
 }

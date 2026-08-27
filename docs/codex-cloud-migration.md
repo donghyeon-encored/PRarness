@@ -101,7 +101,12 @@ an expired GitHub App installation token before work starts. See the official
    Every fresh or resumed container repairs `origin`, refreshes authentication,
    and verifies the minted App token's Contents, Issues, and Pull requests
    permissions (or a user token's repository push permission) plus a non-empty
-   HTTPS Git credential before the agent phase. Repository
+   HTTPS Git credential before the agent phase. It writes the current
+   multi-account `gh` host structure and pins the repository-local HTTPS
+   username to `x-access-token` for managed App/token credentials, overriding
+   checkout-level credential defaults. Pre-existing `gh` authentication uses
+   its authenticated login instead.
+   Repository
    `permissions.push` describes user-style repository access and is not used to
    classify a GitHub App installation token. `git ls-remote` remains a
    supplemental connectivity check because a public repository can pass it

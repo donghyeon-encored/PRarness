@@ -69,7 +69,12 @@ procedure.
   repairs `origin`, refreshes or loads the repository-scoped credential, and
   verifies App installation-token permissions (or user-token repository push
   permission) plus the HTTPS Git credential helper without an interactive
-  login. Do not use a GitHub App's repository `permissions.push` field as the
+  login. For managed App/token credentials it pins the repository-local HTTPS
+  username to `x-access-token` so a Cloud checkout cannot inherit an
+  incompatible global credential username, and writes both the active and
+  multi-account `gh` host entries. Existing `gh` authentication instead pins
+  its authenticated login. Do not use a
+  GitHub App's repository `permissions.push` field as the
   App authorization test; App authorization comes from its installation/token
   permissions. A public `git ls-remote` result alone is not a write check.
 - Commit a reviewed `.github/prarness.yml` in every target. Run

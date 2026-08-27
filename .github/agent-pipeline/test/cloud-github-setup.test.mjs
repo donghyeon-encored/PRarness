@@ -32,6 +32,10 @@ exec ${JSON.stringify(realGit)} "$@"
   await writeFile(join(bin, "gh"), `#!/usr/bin/env bash
 if [[ $1 == api ]]; then
   [[ -f "$HOME/.config/gh/hosts.yml" ]] || exit 1
+  if [[ $2 == user ]]; then
+    printf '%s\\n' "\${TEST_GH_USER:-test-user}"
+    exit 0
+  fi
   if [[ $* == *'.permissions.push == true'* ]]; then
     printf '%s\\n' "\${TEST_PUSH_PERMISSION:-true}"
   else
@@ -45,7 +49,7 @@ if [[ $1 == repo && $2 == set-default ]]; then
 fi
 if [[ $1 == auth && $2 == git-credential ]]; then
   [[ \${TEST_GIT_CREDENTIAL_COMPLETE:-true} == true ]] || exit 0
-  printf '%s\\n' 'protocol=https' 'host=github.com' 'username=x-access-token' 'password=test-credential'
+  printf '%s\\n' 'protocol=https' 'host=github.com' "username=\${TEST_GIT_CREDENTIAL_USERNAME:-x-access-token}" 'password=test-credential'
   exit 0
 fi
 exit 7
@@ -125,6 +129,11 @@ async function assertConfigured(context, repository, token = "github_pat_test_to
   assert.equal(resolution.stdout.trim(), "remote.origin.gh-resolved base");
   const hosts = await readFile(join(context.home, ".config/gh/hosts.yml"), "utf8");
   assert.match(hosts, new RegExp(`oauth_token: ${token}`));
+  assert.match(hosts, /users:\n\s+x-access-token:\n\s+oauth_token:/);
+  const credentialUsername = await exec(context.realGit, [
+    "config", "--local", "--get", "credential.https://github.com.username",
+  ], { cwd: context.repo });
+  assert.equal(credentialUsername.stdout.trim(), "x-access-token");
   const metadata = JSON.parse(await readFile(join(context.home, ".config/gh/prarness-auth.json"), "utf8"));
   assert.equal(metadata.repository, repository);
 }
@@ -135,6 +144,37 @@ test("Cloud setup accepts an explicit repository and persists non-interactive gh
   assert.match(result.stdout, /GitHub write access ready/);
   await assertConfigured(context, "owner/repo");
   await exec("bash", [setup, "--verify", "owner/repo"], { cwd: context.repo, env: context.env });
+});
+
+test("Cloud setup overrides an inherited GitHub HTTPS credential username", async () => {
+  const context = await harness("owner/repo");
+  await exec(context.realGit, [
+    "config", "--global", "credential.https://github.com.username", "cloud-checkout-user",
+  ], { cwd: context.repo, env: context.env });
+  await exec("bash", [setup, "owner/repo"], { cwd: context.repo, env: context.env });
+  await assertConfigured(context, "owner/repo");
+});
+
+test("Cloud setup preserves the active username for existing GitHub CLI authentication", async () => {
+  const context = await harness("owner/repo");
+  delete context.env.CODEX_GITHUB_TOKEN;
+  context.env.TEST_GH_USER = "existing-user";
+  context.env.TEST_GIT_CREDENTIAL_USERNAME = "existing-user";
+  const ghConfig = join(context.home, ".config", "gh");
+  await mkdir(ghConfig, { recursive: true });
+  await writeFile(join(ghConfig, "hosts.yml"), "github.com:\n    user: existing-user\n");
+  await exec(context.realGit, [
+    "config", "--global", "credential.https://github.com.username", "cloud-checkout-user",
+  ], { cwd: context.repo, env: context.env });
+
+  await exec("bash", [setup, "owner/repo"], { cwd: context.repo, env: context.env });
+
+  const credentialUsername = await exec(context.realGit, [
+    "config", "--local", "--get", "credential.https://github.com.username",
+  ], { cwd: context.repo });
+  assert.equal(credentialUsername.stdout.trim(), "existing-user");
+  const metadata = JSON.parse(await readFile(join(ghConfig, "prarness-auth.json"), "utf8"));
+  assert.equal(metadata.auth_kind, "existing");
 });
 
 test("Cloud setup detects the repository from the environment without an argument", async () => {
