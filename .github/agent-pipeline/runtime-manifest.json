@@ -4,7 +4,7 @@
   "files": [
     {
       "path": "cloud-github-setup.sh",
-      "sha256": "c56778c975ca3e66ad20f24fd850f4f19bccb05085aee6050d0ad3c12f214d05",
+      "sha256": "718c3ec0fea5437eef5de569e57dc385682a839a9adb3b0983203f0da94ba7f6",
       "executable": true
     },
     {
@@ -39,7 +39,7 @@
     },
     {
       "path": "pipeline.mjs",
-      "sha256": "1a4aaa9523253a96e0c47c2bb3b5356d6dbde98910e0a9196bf0ae216a9b1563",
+      "sha256": "2de7b0facd8b79bbe3d07e58a0a6290fb42eab125ad88f6c0c9493b9f3a5818a",
       "executable": false
     },
     {

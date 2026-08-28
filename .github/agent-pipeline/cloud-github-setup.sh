@@ -4,6 +4,9 @@ set -euo pipefail
 set +x
 umask 077
 
+failure_stage=initialization
+trap 'status=$?; echo "Unexpected GitHub setup failure during ${failure_stage} (exit ${status})." >&2; exit "$status"' ERR
+
 mode=configure
 case ${1:-} in
   --verify|--verify-write)
@@ -425,12 +428,14 @@ detect_repository() {
   return 2
 }
 
+failure_stage=repository_detection
 repository=$(detect_repository "${1:-}") || exit $?
 if ! valid_repository_name "$repository"; then
   echo 'Codex Cloud GitHub repository must use owner/repository format.' >&2
   exit 2
 fi
 
+failure_stage=remote_configuration
 remote_url="${server_url%/}/${repository}.git"
 if git remote get-url origin >/dev/null 2>&1; then
   git remote set-url origin "$remote_url"
@@ -488,6 +493,7 @@ config_dir=${GH_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/gh}
 auth_metadata_file="$config_dir/prarness-auth.json"
 credential_store_file="$config_dir/prarness-git-credentials"
 
+failure_stage=authentication_configuration
 if [[ $mode == configure ]]; then
   token=${CODEX_GITHUB_TOKEN:-${GH_TOKEN:-${GITHUB_TOKEN:-}}}
   expires_at=''
@@ -572,6 +578,7 @@ if [[ $mode == configure ]]; then
   unset token GITHUB_TOKEN GH_TOKEN CODEX_GITHUB_TOKEN AGENT_APP_PRIVATE_KEY
 fi
 
+failure_stage=credential_helper_configuration
 auth_kind=existing
 if [[ -f $auth_metadata_file ]]; then
   auth_kind=$(jq -r '.auth_kind // "unknown"' "$auth_metadata_file")
@@ -599,8 +606,10 @@ fi
 git config --local user.name "${CODEX_GIT_AUTHOR_NAME:-codex-cloud}"
 git config --local user.email "${CODEX_GIT_AUTHOR_EMAIL:-codex-cloud@users.noreply.github.com}"
 
+failure_stage=repository_verification
 gh api "repos/$repository" --jq '.full_name' | grep -Fqx "$repository"
 
+failure_stage=credential_helper_verification
 credential_file=$(mktemp)
 chmod 600 "$credential_file"
 cleanup_credential_file() {
@@ -615,6 +624,7 @@ fi
   echo 'Git credential helper returned incomplete GitHub HTTPS credentials.' >&2
   exit 2
 }
+failure_stage=metadata_verification
 if [[ -f $auth_metadata_file ]]; then
   credential_fingerprint=$(jq -r '.credential_fingerprint // empty' "$auth_metadata_file")
   if [[ -n $credential_fingerprint ]]; then
@@ -679,7 +689,10 @@ if [[ -f $auth_metadata_file ]]; then
     fi
   fi
 fi
+failure_stage=default_repository_configuration
 configure_gh_default_repository
+failure_stage=remote_verification
 git ls-remote --exit-code origin HEAD >/dev/null
 
+trap - ERR
 echo "Codex Cloud GitHub write access ready: origin -> $remote_url; gh -> $repository"

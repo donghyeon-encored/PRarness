@@ -1839,6 +1839,25 @@ function relatedFilesWithRg(repo, files, issue) {
       }
     }
   }
+  // Codex Cloud normally provides ripgrep, but the runtime contract must stay
+  // portable to minimal Linux images and target validation runners. A bounded
+  // in-process scan preserves the same evidence when rg is unavailable (and
+  // also covers filenames, which are useful signals for short Issues).
+  if (!scores.size && tokens.length) {
+    for (const filePath of files) {
+      const absolute = join(repo, ...filePath.split("/"));
+      let source = "";
+      try {
+        if (readFileSync(absolute).byteLength <= 512 * 1024) source = readFileSync(absolute, "utf8");
+      } catch {
+        source = "";
+      }
+      if (source.includes("\0")) source = "";
+      const haystack = `${filePath}\n${source}`.toLowerCase();
+      const hits = tokens.filter((token) => haystack.includes(token)).length;
+      if (hits) scores.set(filePath, hits);
+    }
+  }
   return scores;
 }
 
