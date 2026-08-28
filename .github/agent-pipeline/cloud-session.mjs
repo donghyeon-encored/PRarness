@@ -134,6 +134,75 @@ function checkoutManagedHead(repo, branch, expectedSha) {
   if (git(repo, ["rev-parse", "HEAD"]) !== expectedSha) git(repo, ["switch", "--detach", expectedSha]);
 }
 
+function isAncestor(repo, ancestor, descendant) {
+  const result = spawnSync("git", ["merge-base", "--is-ancestor", ancestor, descendant], {
+    cwd: repo,
+    stdio: "ignore",
+    env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+  });
+  if (result.status === 0) return true;
+  if (result.status === 1) return false;
+  throw new CloudSessionError("GIT_COMMAND_FAILED", "git merge-base failed while verifying the live base");
+}
+
+function remoteBranchSha(repo, branch) {
+  const output = git(repo, ["ls-remote", "--heads", "origin", `refs/heads/${branch}`]);
+  const match = output.match(/^([0-9a-f]{40})\s+refs\/heads\/.+$/m);
+  requireCondition(match, "REMOTE_BRANCH_MISSING", "Managed branch was not found on origin");
+  return match[1];
+}
+
+async function confirmPullRefresh(client, pullNumber, headSha, baseSha) {
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    const pull = (await client.request("GET", client.repoPath(`/pulls/${pullNumber}`))).data;
+    if (pull?.head?.sha === headSha && pull?.base?.sha === baseSha) return pull;
+    if (attempt < 5) await new Promise((resolvePromise) => setTimeout(resolvePromise, attempt * 200));
+  }
+  throw new CloudSessionError("BASE_REFRESH_NOT_CONFIRMED", "Canonical pull request did not confirm the refreshed branch and live base");
+}
+
+async function refreshManagedBase(client, options) {
+  const { repo, pull, branch, defaultBranch, intakeSourceSha } = options;
+  const expectedHead = String(pull?.head?.sha ?? "");
+  const liveBaseSha = String(pull?.base?.sha ?? "");
+  requireCondition(/^[0-9a-f]{40}$/.test(expectedHead) && /^[0-9a-f]{40}$/.test(liveBaseSha),
+    "INVALID_PR_SHA", "Canonical pull request is missing a full head or base SHA");
+  git(repo, ["fetch", "--no-tags", "origin", `refs/heads/${defaultBranch}:refs/remotes/origin/${defaultBranch}`]);
+  const fetchedBase = git(repo, ["rev-parse", `refs/remotes/origin/${defaultBranch}`]);
+  requireCondition(fetchedBase === liveBaseSha, "STALE_BASE", "Default branch moved while the Cloud session was being prepared");
+  requireCondition(isAncestor(repo, intakeSourceSha, liveBaseSha), "DIVERGED_BASE",
+    "Current default branch is not a fast-forward descendant of the intake source SHA");
+  const currentHead = git(repo, ["rev-parse", "HEAD"]);
+  requireCondition(currentHead === expectedHead && remoteBranchSha(repo, branch) === expectedHead,
+    "STALE_REMOTE_BRANCH", "Managed branch moved while the Cloud session was being prepared");
+  if (isAncestor(repo, liveBaseSha, currentHead)) {
+    return { pull, source_sha: liveBaseSha, subject_sha: currentHead, refreshed: false };
+  }
+  const merge = spawnSync("git", [
+    "-c", "core.hooksPath=/dev/null",
+    "-c", "user.name=prarness-cloud[bot]",
+    "-c", "user.email=prarness-cloud[bot]@users.noreply.github.com",
+    "merge", "--no-ff", "-m", `chore(prarness): refresh ${defaultBranch} for managed Issue branch`, liveBaseSha,
+  ], {
+    cwd: repo,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+  });
+  if (merge.status !== 0) {
+    spawnSync("git", ["merge", "--abort"], { cwd: repo, stdio: "ignore", env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
+    throw new CloudSessionError("BASE_REFRESH_CONFLICT", "Managed branch conflicts with the current default branch; human rebase review is required");
+  }
+  const refreshedHead = git(repo, ["rev-parse", "HEAD"]);
+  requireCondition(isAncestor(repo, expectedHead, refreshedHead) && isAncestor(repo, liveBaseSha, refreshedHead),
+    "INVALID_BASE_REFRESH", "Base refresh did not preserve both managed and default branch ancestry");
+  git(repo, ["push", "origin", `HEAD:refs/heads/${branch}`]);
+  requireCondition(remoteBranchSha(repo, branch) === refreshedHead, "BASE_REFRESH_NOT_CONFIRMED",
+    "Managed branch base refresh was not confirmed on origin");
+  const updatedPull = await confirmPullRefresh(client, pull.number, refreshedHead, liveBaseSha);
+  return { pull: updatedPull, source_sha: liveBaseSha, subject_sha: refreshedHead, refreshed: true };
+}
+
 export async function prepareCloudSession(options = {}) {
   const repo = resolve(options.repo ?? ".");
   const repository = String(options.repository ?? "");
@@ -145,7 +214,7 @@ export async function prepareCloudSession(options = {}) {
   requireCondition((Number.isInteger(requestedPr) && requestedPr > 0) !== Boolean(requestedBranch), "INVALID_SESSION_TARGET",
     "prepare requires exactly one positive --pr number or managed --branch");
   if (requestedBranch) requireCondition(safeBranch(requestedBranch, issueNumber), "INVALID_SESSION_TARGET", "prepare branch is not managed by the source Issue");
-  const compatibility = checkRepositoryCompatibility({ repo, repository, config: options.config ?? ".github/prarness.yml" });
+  let compatibility = checkRepositoryCompatibility({ repo, repository, config: options.config ?? ".github/prarness.yml" });
   if (!options.skip_preflight) await preflightGitHubCapabilities(repository, options);
   const { client } = options.client
     ? { client: options.client }
@@ -162,20 +231,24 @@ export async function prepareCloudSession(options = {}) {
     "INVALID_INTAKE_STATE", "Canonical intake state is missing source, bootstrap, or runtime SHA");
   const runtimeRepository = String(state.runtime_repository ?? DEFAULT_RUNTIME_REPOSITORY);
   requireCondition(safeRepository(runtimeRepository), "INVALID_INTAKE_STATE", "Canonical intake state has an invalid runtime repository");
+  if (options.require_pinned_runtime) verifyPinnedRuntime(state.runtime_ref, options.executable ?? process.argv[1]);
+  const repositoryResponse = await client.request("GET", client.repoPath(""));
+  const defaultBranch = String(repositoryResponse.data?.default_branch ?? "");
+  requireCondition(defaultBranch && !defaultBranch.includes("..") && !/\s/.test(defaultBranch),
+    "INVALID_DEFAULT_BRANCH", "GitHub did not return a safe default branch");
+  const configuredBase = String(state.base ?? defaultBranch);
+  requireCondition(configuredBase === defaultBranch, "INTAKE_STATE_MISMATCH", "Canonical intake base is not the current default branch");
   let pull;
   if (requestedPr !== null) {
     pull = (await client.request("GET", client.repoPath(`/pulls/${requestedPr}`))).data;
   } else {
     requireCondition(requestedBranch === state.branch, "INTAKE_STATE_MISMATCH", "Requested branch does not match canonical intake state");
-    const repositoryResponse = await client.request("GET", client.repoPath(""));
-    const base = String(state.base ?? repositoryResponse.data?.default_branch ?? "");
-    requireCondition(base && !base.includes("..") && !/\s/.test(base), "INVALID_DEFAULT_BRANCH", "GitHub did not return a safe default branch");
     pull = await ensureCloudPullRequest(client, {
       repository,
       issue: issueNumber,
       title: issue.title,
       branch: state.branch,
-      base,
+      base: defaultBranch,
       runtimeRef: state.runtime_ref,
       runtimeRepository,
     });
@@ -184,6 +257,7 @@ export async function prepareCloudSession(options = {}) {
   requireCondition(pull?.number === prNumber && pull?.state === "open" && pull?.merged !== true && pull?.draft === true,
     "UNSAFE_PR", "Canonical pull request must exist, remain open, and remain draft");
   requireCondition(pull?.head?.repo?.full_name === repository && pull?.base?.repo?.full_name === repository, "UNSAFE_PR", "Canonical pull request must be same-repository");
+  requireCondition(pull?.base?.ref === defaultBranch, "UNSAFE_PR", "Canonical pull request does not target the current default branch");
   const branch = String(pull?.head?.ref ?? state.branch);
   requireCondition(branch.startsWith(`agent/issue-${issueNumber}-`), "UNSAFE_PR", "Pull request branch does not match its source Issue");
   requireCondition((state.pr === null || state.pr === prNumber) && state.branch === branch, "INTAKE_STATE_MISMATCH", "Canonical intake state does not match the pull request");
@@ -195,21 +269,34 @@ export async function prepareCloudSession(options = {}) {
       String(manifest.runtime_repository ?? DEFAULT_RUNTIME_REPOSITORY) === runtimeRepository,
     "REQUEST_MANIFEST_MISMATCH", "Tracked request manifest does not match canonical intake state");
   }
-  const head = git(repo, ["rev-parse", "HEAD"]);
+  let head = git(repo, ["rev-parse", "HEAD"]);
   requireCondition(head === pull.head.sha, "CHECKOUT_SHA_MISMATCH", "Cloud checkout HEAD does not match the live pull request head");
   try {
     execFileSync("git", ["merge-base", "--is-ancestor", state.source_sha, head], { cwd: repo, stdio: "ignore" });
   } catch {
     throw new CloudSessionError("SOURCE_SHA_MISMATCH", "Intake source SHA is not an ancestor of the Cloud checkout");
   }
-  if (options.require_pinned_runtime) verifyPinnedRuntime(state.runtime_ref, options.executable ?? process.argv[1]);
+  const baseRefresh = await refreshManagedBase(client, {
+    repo,
+    pull,
+    branch,
+    defaultBranch,
+    intakeSourceSha: state.source_sha,
+  });
+  pull = baseRefresh.pull;
+  head = baseRefresh.subject_sha;
+  const sourceSha = baseRefresh.source_sha;
+  if (baseRefresh.refreshed) {
+    compatibility = checkRepositoryCompatibility({ repo, repository, config: options.config ?? ".github/prarness.yml" });
+    if (!options.skip_preflight) await preflightGitHubCapabilities(repository, { ...options, repo });
+  }
   const instructionsPath = options.require_pinned_runtime
     ? join(dirname(realpathSync(options.executable ?? process.argv[1])), "prompts", "cloud-session.md")
     : null;
-  const commitsAfterBase = Number(git(repo, ["rev-list", "--count", `${state.source_sha}..${head}`]));
+  const commitsAfterBase = Number(git(repo, ["rev-list", "--count", `${sourceSha}..${head}`]));
   requireCondition(Number.isInteger(commitsAfterBase) && commitsAfterBase >= 1, "MISSING_BOOTSTRAP_COMMIT", "Managed branch is missing its bootstrap commit");
   const requestManifest = manifest ? `.prarness/requests/issue-${issueNumber}.json` : null;
-  const existingChangedPaths = gitPaths(repo, state.source_sha, head).filter((filePath) => filePath !== requestManifest);
+  const existingChangedPaths = gitPaths(repo, sourceSha, head).filter((filePath) => filePath !== requestManifest);
   const analysis = analyzeRepositoryIssue({ repo, compatibility, issue, changed_paths: existingChangedPaths });
   const codegraphPath = options.codegraph_output
     ? resolve(options.codegraph_output)
@@ -253,7 +340,10 @@ export async function prepareCloudSession(options = {}) {
     issue: issueNumber,
     pr: prNumber,
     branch,
-    source_sha: state.source_sha,
+    source_sha: sourceSha,
+    intake_source_sha: state.source_sha,
+    base_ref: defaultBranch,
+    base_refreshed: baseRefresh.refreshed,
     subject_sha: head,
     bootstrap_sha: state.bootstrap_sha,
     runtime_ref: state.runtime_ref,
@@ -299,7 +389,8 @@ function readSession(path) {
     Number.isInteger(value.issue) && value.issue > 0 && Number.isInteger(value.pr) && value.pr > 0 &&
     typeof value.branch === "string" && value.branch.startsWith(`agent/issue-${value.issue}-`) &&
     Number.isInteger(value.iteration) && value.iteration > 0 &&
-    /^[0-9a-f]{40}$/.test(value.source_sha ?? "") && /^[0-9a-f]{40}$/.test(value.subject_sha ?? "") &&
+    /^[0-9a-f]{40}$/.test(value.source_sha ?? "") && /^[0-9a-f]{40}$/.test(value.intake_source_sha ?? "") &&
+    /^[0-9a-f]{40}$/.test(value.subject_sha ?? "") &&
     /^[0-9a-f]{40}$/.test(value.bootstrap_sha ?? "") && /^[0-9a-f]{40}$/.test(value.runtime_ref ?? "") &&
     safeRepository(value.runtime_repository) &&
     typeof value.request_id === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{7,127}$/.test(value.request_id),
@@ -394,6 +485,7 @@ export async function publishCloudSession(options = {}) {
       iteration: session.iteration,
       stage: "implement",
       source_sha: session.source_sha,
+      intake_source_sha: session.intake_source_sha,
       subject_sha: session.subject_sha,
       branch: session.branch,
       allowed_paths: plan.changed_paths,

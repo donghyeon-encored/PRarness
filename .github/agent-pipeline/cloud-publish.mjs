@@ -53,7 +53,7 @@ function readRequest(filePath) {
     throw new CloudPublishError("INVALID_PUBLISH_REQUEST", "Publish request must be valid JSON");
   }
   exactKeys(value, [
-    "version", "runtime_contract", "request_id", "repository", "issue", "iteration", "stage", "source_sha",
+    "version", "runtime_contract", "request_id", "repository", "issue", "iteration", "stage", "source_sha", "intake_source_sha",
     "subject_sha", "branch", "allowed_paths", "plan", "review",
   ], "request");
   requireCondition(value.version === 1 && value.runtime_contract === 1, "RUNTIME_CONTRACT_MISMATCH", "Publish request contract must be version 1");
@@ -62,7 +62,8 @@ function readRequest(filePath) {
   requireCondition(Number.isInteger(value.issue) && value.issue > 0, "INVALID_PUBLISH_REQUEST", "Invalid source Issue");
   requireCondition(Number.isInteger(value.iteration) && value.iteration > 0, "INVALID_PUBLISH_REQUEST", "Invalid implementation iteration");
   requireCondition(value.stage === "implement", "INVALID_PUBLISH_REQUEST", "Only an implement request may publish code");
-  requireCondition(/^[0-9a-f]{40}$/.test(value.source_sha ?? "") && /^[0-9a-f]{40}$/.test(value.subject_sha ?? ""), "INVALID_PUBLISH_REQUEST", "Request SHAs must be full lowercase Git SHAs");
+  requireCondition(/^[0-9a-f]{40}$/.test(value.source_sha ?? "") && /^[0-9a-f]{40}$/.test(value.intake_source_sha ?? "") &&
+    /^[0-9a-f]{40}$/.test(value.subject_sha ?? ""), "INVALID_PUBLISH_REQUEST", "Request SHAs must be full lowercase Git SHAs");
   requireCondition(typeof value.branch === "string" && value.branch.startsWith(`agent/issue-${value.issue}-`) && !value.branch.includes("..") && !/\s/.test(value.branch), "UNSAFE_BRANCH", "Managed branch does not match the source Issue");
   requireCondition(Array.isArray(value.allowed_paths) && value.allowed_paths.length > 0 && value.allowed_paths.every((filePath) => typeof filePath === "string" && filePath && !filePath.startsWith("/") && !filePath.includes("..") && !filePath.includes("\\") && !filePath.includes("\0")), "INVALID_ALLOWED_PATHS", "allowed_paths must contain safe repository-relative paths");
   requireCondition(new Set(value.allowed_paths).size === value.allowed_paths.length, "INVALID_ALLOWED_PATHS", "allowed_paths must be unique");
@@ -158,10 +159,11 @@ export async function publishCloudRequest(options = {}) {
   const head = git(repo, ["rev-parse", "HEAD"]).trim();
   requireCondition(/^[0-9a-f]{40}$/.test(head), "MISSING_COMMIT", "No publishable commit exists");
   try {
+    execFileSync("git", ["merge-base", "--is-ancestor", request.intake_source_sha, request.source_sha], { cwd: repo, stdio: "ignore" });
     execFileSync("git", ["merge-base", "--is-ancestor", request.source_sha, request.subject_sha], { cwd: repo, stdio: "ignore" });
     execFileSync("git", ["merge-base", "--is-ancestor", request.subject_sha, head], { cwd: repo, stdio: "ignore" });
   } catch {
-    throw new CloudPublishError("SOURCE_SHA_MISMATCH", "The source, starting branch head, and implementation HEAD are not a fast-forward chain");
+    throw new CloudPublishError("SOURCE_SHA_MISMATCH", "The intake source, refreshed source, starting branch head, and implementation HEAD are not an ancestry chain");
   }
   const commitCount = Number(git(repo, ["rev-list", "--count", `${request.subject_sha}..${head}`]).trim());
   requireCondition(commitCount === 1, "INVALID_COMMIT_COUNT", "One Cloud session must append exactly one implementation commit to its starting branch head");

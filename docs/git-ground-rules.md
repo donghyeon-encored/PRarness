@@ -47,8 +47,12 @@ untrusted code while setup secrets are available.
 - A Cloud worker runs `prarness-session prepare` before inspecting or editing
   code. Initial branch-bound preparation uses the verified App credential to
   create or reuse the same-repository draft PR and claim its exact remote head.
-  Preparation then binds the live Issue, canonical intake comment, PR, branch,
-  source SHA, bootstrap SHA, runtime SHA, and local checkout HEAD.
+  If the default branch advanced as a descendant of the intake source,
+  preparation first merges that live base into the managed branch and pushes
+  the resulting descendant without force. Conflicts or divergent ancestry fail
+  closed. Preparation then binds the live Issue, canonical intake comment, PR,
+  branch, refreshed source SHA, original intake source SHA, bootstrap SHA,
+  runtime SHA, and local checkout HEAD.
 - The worker may use `prarness-github` and `prarness-session publish` for scoped
   Issue, comment, branch, PR, CI, and deployment operations. It never reads,
   prints, copies, or exports the underlying token.
@@ -83,8 +87,10 @@ untrusted code while setup secrets are available.
 
 - Automated branches use `agent/issue-{number}-{slug}` and never target the
   default branch directly.
-- One Cloud session starts at the current remote managed-branch SHA and appends
-  exactly one implementation commit. A moved remote branch aborts publication.
+- Preparation may append one deterministic base-refresh merge commit before a
+  session is bound. One Cloud session then starts at that exact current remote
+  managed-branch SHA and appends exactly one implementation commit. A moved
+  remote branch aborts publication.
 - The implementation commit is one coherent semantic unit, changes no more
   than 400 lines, and contains both trailers:
 
