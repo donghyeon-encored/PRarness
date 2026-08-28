@@ -34,7 +34,7 @@
     },
     {
       "path": "cloud-session.mjs",
-      "sha256": "24495b39bea5fc7f3041518aacc00a678adba4a72271953a181d5b49b51704b7",
+      "sha256": "4c7c6178dbb4f4f5e4ff446407a500f48c9158d559c604e064e120ea033dfca2",
       "executable": true
     },
     {
@@ -44,7 +44,7 @@
     },
     {
       "path": "pipeline.mjs",
-      "sha256": "80fee8d5ce230a0e2601f51939f31e216a812ae7bf2fd08ee1aea4ff21f7c103",
+      "sha256": "ce3bfdf4c069617cb5fc421d36123aa3da77e9b5b7ad2e77a80b005434482ffb",
       "executable": false
     },
     {

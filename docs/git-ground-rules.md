@@ -50,7 +50,10 @@ untrusted code while setup secrets are available.
   If the default branch advanced as a descendant of the intake source,
   preparation first merges that live base into the managed branch and pushes
   the resulting descendant without force. Conflicts or divergent ancestry fail
-  closed. Preparation then binds the live Issue, canonical intake comment, PR,
+  closed. The live base is read from the default branch ref and confirmed by
+  its commit endpoint; a pull request's historical `base.sha` snapshot is not
+  treated as the live branch head. Preparation then binds the live Issue,
+  canonical intake comment, PR,
   branch, refreshed source SHA, original intake source SHA, bootstrap SHA,
   runtime SHA, and local checkout HEAD.
 - The worker may use `prarness-github` and `prarness-session publish` for scoped

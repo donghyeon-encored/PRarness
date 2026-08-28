@@ -147,7 +147,7 @@ test("Cloud publisher confirms the pushed SHA and live REST pull request", async
     merged: false,
     draft: true,
     head: { ref: "agent/issue-1-fix", sha: context.headSha, repo: { full_name: "owner/repo" } },
-    base: { ref: "main", sha: context.sourceSha, repo: { full_name: "owner/repo" } },
+    base: { ref: "main", sha: context.intakeSourceSha, repo: { full_name: "owner/repo" } },
   };
   globalThis.fetch = async (url, options = {}) => {
     const parsed = new URL(url);
