@@ -35,6 +35,7 @@ test("Cloud runtime installs one-session commands and has no relay dependency", 
   const installer = await readFile(new URL("../cloud-environment-bootstrap.sh", import.meta.url), "utf8");
   const setup = await readFile(new URL("../cloud-github-setup.sh", import.meta.url), "utf8");
   const session = await readFile(new URL("../cloud-session.mjs", import.meta.url), "utf8");
+  const analysis = await readFile(new URL("../cloud-analysis.mjs", import.meta.url), "utf8");
   const publisher = await readFile(new URL("../cloud-publish.mjs", import.meta.url), "utf8");
 
   assert.match(policy, /human.*`@codex`/i);
@@ -47,7 +48,16 @@ test("Cloud runtime installs one-session commands and has no relay dependency", 
   assert.match(setup, /\.permissions\.push == true/);
   assert.match(session, /prepareCloudSession/);
   assert.match(session, /publishCloudSession/);
+  assert.match(session, /analyzeRepositoryIssue/);
+  assert.match(session, /prarness-codegraph\.json/);
+  assert.match(analysis, /buildCodegraph/);
+  assert.match(analysis, /selectOwner/);
+  assert.match(analysis, /selectPrTeam/);
   assert.match(publisher, /STALE_REMOTE_BRANCH/);
   assert.match(publisher, /Agent-Iteration/);
+  assert.match(publisher, /evaluateRisk/);
+  assert.match(publisher, /UNRESOLVED_LOW_RISK_REVIEW/);
+  assert.doesNotMatch(publisher, /risk:\s*["']medium["']/);
+  assert.doesNotMatch(publisher, /problems:\s*\[\]/);
   assert.doesNotMatch([policy, agents, installer, session].join("\n"), /CODEX_CLOUD_ENV_ID|cloud-bridge|github-app-controller|controller-dispatch/);
 });

@@ -18,10 +18,12 @@ test("Cloud environment bootstrap verifies and installs the pinned runtime bundl
   const bin = join(directory, "bin");
   const source = join(directory, "source-setup.sh");
   const repositoryCheck = join(directory, "repository-check.mjs");
+  const cloudAnalysis = join(directory, "cloud-analysis.mjs");
   const githubOperations = join(directory, "cloud-github.mjs");
   const publisher = join(directory, "cloud-publish.mjs");
   const session = join(directory, "cloud-session.mjs");
   const sessionPrompt = join(directory, "cloud-session.md");
+  const teamPolicy = join(directory, "team.yaml");
   const manifest = join(directory, "runtime-manifest.json");
   const invocation = join(directory, "invocation.txt");
   const requestedUrl = join(directory, "requested-url.txt");
@@ -30,17 +32,21 @@ test("Cloud environment bootstrap verifies and installs the pinned runtime bundl
 printf '%s' "$*" > "$TEST_INVOCATION"
 `);
   await writeFile(repositoryCheck, "#!/usr/bin/env node\n");
+  await writeFile(cloudAnalysis, "export const analysis = true;\n");
   await writeFile(githubOperations, "#!/usr/bin/env node\n");
   await writeFile(publisher, "#!/usr/bin/env node\n");
   await writeFile(session, "#!/usr/bin/env node\n");
   await writeFile(sessionPrompt, "Run the one-session contract.\n");
+  await writeFile(teamPolicy, "version: 1\n");
   const entries = [
     ["cloud-github-setup.sh", source, true],
     ["repository-check.mjs", repositoryCheck, true],
+    ["cloud-analysis.mjs", cloudAnalysis, false],
     ["cloud-github.mjs", githubOperations, true],
     ["cloud-publish.mjs", publisher, true],
     ["cloud-session.mjs", session, true],
     ["prompts/cloud-session.md", sessionPrompt, false],
+    ["team.yaml", teamPolicy, false],
   ];
   await writeFile(manifest, JSON.stringify({
     version: 1,
@@ -66,10 +72,12 @@ case "$url" in
   */runtime-manifest.json) cp "$TEST_MANIFEST_SOURCE" "$output" ;;
   */cloud-github-setup.sh) cp "$TEST_SETUP_SOURCE" "$output" ;;
   */repository-check.mjs) cp "$TEST_CHECK_SOURCE" "$output" ;;
+  */cloud-analysis.mjs) cp "$TEST_ANALYSIS_SOURCE" "$output" ;;
   */cloud-github.mjs) cp "$TEST_GITHUB_SOURCE" "$output" ;;
   */cloud-publish.mjs) cp "$TEST_PUBLISH_SOURCE" "$output" ;;
   */cloud-session.mjs) cp "$TEST_SESSION_SOURCE" "$output" ;;
   */prompts/cloud-session.md) cp "$TEST_SESSION_PROMPT_SOURCE" "$output" ;;
+  */team.yaml) cp "$TEST_TEAM_SOURCE" "$output" ;;
   *) exit 90 ;;
 esac
 `);
@@ -87,10 +95,12 @@ esac
       TEST_SETUP_SOURCE: source,
       TEST_MANIFEST_SOURCE: manifest,
       TEST_CHECK_SOURCE: repositoryCheck,
+      TEST_ANALYSIS_SOURCE: cloudAnalysis,
       TEST_GITHUB_SOURCE: githubOperations,
       TEST_PUBLISH_SOURCE: publisher,
       TEST_SESSION_SOURCE: session,
       TEST_SESSION_PROMPT_SOURCE: sessionPrompt,
+      TEST_TEAM_SOURCE: teamPolicy,
     },
   });
 
@@ -118,7 +128,7 @@ test("committed runtime manifest covers required commands and has exact hashes",
   assert.equal(manifest.version, 1);
   assert.equal(manifest.runtime_contract, 1);
   const entries = new Map(manifest.files.map((entry) => [entry.path, entry]));
-  for (const required of ["cloud-github-setup.sh", "repository-check.mjs", "cloud-github.mjs", "cloud-publish.mjs", "cloud-session.mjs", "prompts/cloud-session.md", "pipeline.mjs"]) {
+  for (const required of ["cloud-github-setup.sh", "repository-check.mjs", "cloud-analysis.mjs", "cloud-github.mjs", "cloud-publish.mjs", "cloud-session.mjs", "prompts/cloud-session.md", "pipeline.mjs", "team.yaml"]) {
     assert.equal(entries.has(required), true, `missing runtime entry: ${required}`);
   }
   for (const [relativePath, entry] of entries) {

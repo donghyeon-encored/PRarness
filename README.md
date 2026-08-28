@@ -9,8 +9,9 @@ The supported hostless flow is deliberately explicit:
    branch plus a draft bootstrap PR.
 2. A connected human writes the documented `@codex` command on that PR. This
    is the supported ChatGPT-authenticated Cloud dispatch boundary.
-3. One Codex Cloud task runs the pinned central runtime, analyzes, plans,
-   implements, reviews, validates, commits, pushes, and updates GitHub.
+3. One Codex Cloud task runs the pinned central runtime, builds a CodeGraph,
+   routes R&R, analyzes, plans, implements, performs risk-based review,
+   validates, commits, pushes, and updates GitHub assignees/comments/reviewer.
 4. Secret-free GitHub Actions CI independently validates the resulting PR.
 
 GitHub is the durable queue and result store. Automation never pretends that a
@@ -41,6 +42,7 @@ npm test
 .github/agent-pipeline/cloud-environment-bootstrap.sh
 .github/agent-pipeline/cloud-github-setup.sh     remote and GitHub App auth setup
 .github/agent-pipeline/cloud-session.mjs         one-session prepare/validate/publish
+.github/agent-pipeline/cloud-analysis.mjs        target R&R and bounded CodeGraph
 .github/agent-pipeline/cloud-github.mjs          verified Issue/comment/CI/deploy ops
 .github/agent-pipeline/cloud-publish.mjs         SHA-bound commit/branch/PR publisher
 .github/agent-pipeline/runtime-manifest.json     pinned runtime checksums

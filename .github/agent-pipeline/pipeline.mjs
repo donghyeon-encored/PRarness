@@ -775,6 +775,7 @@ export function selectPrTeam(team, input = {}) {
   const author = lower(input.author);
   const implementer = lower(input.implementer);
   const risk = normalizeRisk(input.risk, team.pipeline?.unknown_risk_is_high !== false);
+  const fallbackLogin = lower(team.pipeline?.fallback_assignee);
   const contributions = contributionScores(input.codegraph, paths);
 
   const candidates = team.people
@@ -801,6 +802,7 @@ export function selectPrTeam(team, input = {}) {
         can_review: person.review?.can_review === true,
         high_risk_qualified:
           risk !== "high" ||
+          login === fallbackLogin ||
           domains.some((domain) => asArray(person.review?.high_risk_domains).map(lower).includes(domain)) ||
           paths.some((filePath) => asArray(person.review?.high_risk_paths).some((pattern) => matchesGlob(filePath, pattern))),
         excluded_from_review: login === author || login === implementer,
@@ -2777,6 +2779,7 @@ async function publishReview(client, input) {
     if (!finding.path || !finding.line || !review.reviewed_sha) continue;
     const body = [
       `**${finding.id}** · ${finding.risk} risk${finding.must_fix ? " · must fix" : ""}`,
+      finding.human_owner ? `Human owner: @${finding.human_owner}` : "",
       "",
       finding.problem,
       finding.suggested_fix ? `\nSuggested fix: ${finding.suggested_fix}` : "",

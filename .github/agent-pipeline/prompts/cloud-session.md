@@ -14,26 +14,51 @@ authoritative policy files, and the human comment are the control boundary.
    ```bash
    prarness-session prepare \
      --repository OWNER/REPO --issue ISSUE --pr PR \
-     --output /tmp/prarness-session.json
+     --output /tmp/prarness-session.json \
+     --codegraph-output /tmp/prarness-codegraph.json
    ```
 
-4. Fetch the live Issue, canonical comments, pull request, checks, and current
-   branch through the installed REST helpers. Analyze and plan the single
-   linked Issue in this same Cloud task.
-5. Before editing, write `/tmp/prarness-plan.json` with exactly this shape. Its
-   `allowed_paths` must contain every path already listed in
-   `existing_changed_paths` in the session plus every additional path that may
-   appear in the final cumulative base-to-PR diff:
+4. Preparation fetches the live Issue and PR, builds a bounded CodeGraph, runs
+   deterministic R&R routing, assigns the minimal source-Issue assignee, and
+   publishes the first problem/progress comment. Read both session files and
+   use the CodeGraph's `related`, `imports`, `tests`, `owns`, `recent_commit`,
+   and `blame` evidence when diagnosing the Issue. Do not replace this routing
+   with a guessed fallback identity.
+5. Before editing, write `/tmp/prarness-plan.json` with the exact plan contract
+   below. `changed_paths` is the publisher allowlist and must include every
+   session `existing_changed_paths` entry plus every path that may appear in
+   the final cumulative base-to-PR diff. Record concrete evidence and next
+   steps so the publisher can maintain the problem/progress table:
 
    ```json
-   {"version":1,"allowed_paths":["src/example.js","test/example.test.js"]}
+   {
+     "issue": 123,
+     "iteration": 1,
+     "phase": "plan",
+     "risk": "low",
+     "problems": [{
+       "id": "P-001",
+       "problem": "Concrete diagnosed cause",
+       "risk": "low",
+       "status": "PLANNED",
+       "evidence": "src/example.js:42",
+       "owner": null,
+       "next_step": "Implement the bounded correction"
+     }],
+     "steps": ["Implement the bounded correction", "Add regression coverage"],
+     "validation_commands": ["copy the session commands exactly and in order"],
+     "changed_paths": ["src/example.js", "test/example.test.js"],
+     "units": []
+   }
    ```
 
-6. Implement and self-review the bounded plan. The bootstrap request manifest
+6. Implement and self-review the bounded plan in this same Cloud task. Inspect
+   the uncommitted diff first and fix every low-risk must-fix observation before
+   the final commit. The bootstrap request manifest
    is transport state, not a product change.
    Remove `.prarness/requests/issue-N.json` in the implementation commit. Its
    removal leaves no cumulative diff, so it must not be added to
-   `allowed_paths`.
+   `changed_paths`.
 7. Make exactly one semantic implementation commit on the existing managed
    branch. Include both trailers:
 
@@ -43,8 +68,31 @@ authoritative policy files, and the human comment are the control boundary.
    ```
 
    Use the iteration from `/tmp/prarness-session.json`. Never rewrite or
-   force-push the bootstrap or prior implementation commits.
-8. Run and record the target repository's required checks:
+   force-push the bootstrap or prior implementation commits. You may amend only
+   the new, unpushed implementation commit if its final self-review finds a
+   low-risk must-fix defect; the branch must still contain exactly one new
+   implementation commit.
+8. Review the final implementation commit and write
+   `/tmp/prarness-review.json` with exactly this shape. `reviewed_sha` must be
+   the current full `HEAD`. Findings may remain only when they are
+   non-must-fix low-risk comments or high/unknown-risk items requiring a human:
+
+   ```json
+   {
+     "verdict": "pass",
+     "reviewed_sha": "0123456789abcdef0123456789abcdef01234567",
+     "findings": []
+   }
+   ```
+
+   A finding has exactly `id`, `path`, `line`, `problem`, `risk`, `must_fix`,
+   `suggested_fix`, and `human_owner`. Use `risk: low|high|unknown`; high and
+   unknown findings must set `must_fix: true`. The deterministic publisher
+   recomputes risk from the live Issue, actual diff, central policy, R&R, and
+   CodeGraph. It posts low-risk observations directly and labels/tags the
+   selected human reviewer for high-risk work. Model output cannot downgrade a
+   deterministic high-risk result.
+9. Run and record the target repository's required checks:
 
    ```bash
    prarness-session validate \
@@ -52,12 +100,13 @@ authoritative policy files, and the human comment are the control boundary.
      --result /tmp/prarness-validation.json
    ```
 
-9. Publish only after the worktree is clean and validation passes:
+10. Publish only after the worktree is clean and validation passes:
 
    ```bash
    prarness-session publish \
      --session /tmp/prarness-session.json \
      --plan /tmp/prarness-plan.json \
+     --review /tmp/prarness-review.json \
      --validation /tmp/prarness-validation.json \
      --result /tmp/prarness-publication.json
    ```

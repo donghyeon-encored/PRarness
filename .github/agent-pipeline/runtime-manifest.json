@@ -9,8 +9,13 @@
     },
     {
       "path": "repository-check.mjs",
-      "sha256": "6edc4ef0b7dbcb084463167617927077d6d276ae6739a794dd664adc556214b1",
+      "sha256": "badab29aa0ae385be925de2fab7a374678c90c75955bcf9acebbeb0849e713c0",
       "executable": true
+    },
+    {
+      "path": "cloud-analysis.mjs",
+      "sha256": "2a064e2c65a8be867653662d9975a19698d6659782667540a965bce222734a5d",
+      "executable": false
     },
     {
       "path": "cloud-github.mjs",
@@ -19,22 +24,27 @@
     },
     {
       "path": "cloud-publish.mjs",
-      "sha256": "3e58bf07198a7696bee03328795171ec89e4bd1fbe3ed4d931dcb8ed92e4453c",
+      "sha256": "a3654151f85af1f4dcdc366c2c2f40e3ddfa1073a05abff68ff43e849af85de5",
       "executable": true
     },
     {
       "path": "cloud-session.mjs",
-      "sha256": "7b1b02a9a24daf5024e87fae21d704db9e9c8cf6c0ceaf3dd684da1a87fed276",
+      "sha256": "8951b4534de7a0eb06f3adb6cc4199fe8144f7db131c2adf517007c060f80486",
       "executable": true
     },
     {
       "path": "prompts/cloud-session.md",
-      "sha256": "4251cf65269a048817d5bb8d24b99f7b64e24786772f7e29a08c99763f6acc19",
+      "sha256": "b0b93475960aad9c3128c03d95301f6069fe305d8c9524230eb776eb306363fd",
       "executable": false
     },
     {
       "path": "pipeline.mjs",
-      "sha256": "31702ed9e9a7ebe5dd77e9ec0633d4b2f2fc026f3d33920f4148d87dad798ba7",
+      "sha256": "1a4aaa9523253a96e0c47c2bb3b5356d6dbde98910e0a9196bf0ae216a9b1563",
+      "executable": false
+    },
+    {
+      "path": "team.yaml",
+      "sha256": "c3581ba7ca0fc701d7de9c6e6c89abf1d3479b3d4de9a46e83f93e2fcf095bef",
       "executable": false
     }
   ]

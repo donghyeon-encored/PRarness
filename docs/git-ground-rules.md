@@ -134,12 +134,21 @@ change while still allowing maintainers to update workflows directly.
 
 ## Risk and people
 
-Ownership, active members, reviewer eligibility, protected-path coverage,
-validation commands, and risk categories come only from `team.yaml`. Unknown
+Central risk categories, change limits, and default CodeGraph limits come from
+the SHA-pinned runtime `team.yaml`. Target-specific R&R, active members,
+reviewer eligibility, validation commands, and additional protected paths come
+from protected `.github/prarness.yml` and, when selected, `CODEOWNERS`. Unknown
 or malformed risk is high. A deterministic high-risk result cannot be
 downgraded by model output. Assignees and reviewers must be active, non-bot,
-assignable, and selected from configured responsibility evidence; the worker
-must not invent identities.
+assignable, and selected from configured responsibility, path ownership,
+CodeGraph contribution, or source-Issue evidence; the worker must not invent
+identities.
+
+Session preparation builds the CodeGraph and assigns exactly the selected
+minimal Issue owner before code changes. Publication rebuilds it against the
+actual diff, selects PR assignees and one eligible reviewer, recomputes risk,
+posts low-risk review findings directly, and labels/tags high-risk findings for
+human review. These operations are part of the same Cloud task.
 
 Human review is required before merge. A Cloud task reporting `verified: true`
 means only that its scoped publication and configured CI evidence were

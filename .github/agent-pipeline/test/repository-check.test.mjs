@@ -17,6 +17,7 @@ function validConfig() {
     dispatch: { mode: "human_pr_mention", label: "agent:run", auto_on_open_for_trusted: true },
     publication: { mode: "codex_cloud_direct", branch_prefix: "agent/issue-" },
     ownership: { source: "codeowners", fallback: "maintainer" },
+    codegraph: { max_files: 5000, blame_lookback_days: 365 },
     validation: { commands: ["npm test"] },
     ci: { required: true, trigger: "pull_request", workflow: "ci.yml", app_slug: "github-actions", required_checks: ["Test"], timeout_seconds: 300 },
     protected_paths: { additional: ["infra/production/**"] },
@@ -62,6 +63,7 @@ test("repository config opts into scoped Cloud publication", () => {
   assert.equal(result.branch_prefix, "agent/issue-");
   assert.equal(result.dispatch.mode, "human_pr_mention");
   assert.deepEqual(result.validation_commands, ["npm test"]);
+  assert.equal(result.codegraph.max_files, 5000);
 });
 
 test("repository compatibility accepts a thin adapter without copied runtime", async () => {
@@ -99,6 +101,9 @@ runtime:
 publication:
   mode: codex_cloud_direct
   branch_prefix: agent/issue-
+ownership:
+  source: codeowners
+  fallback: maintainer
 validation:
   commands:
     - npm test
@@ -115,4 +120,23 @@ ci:
     () => checkRepositoryCompatibility({ repo, repository: "owner/repo" }),
     (error) => error.code === "REPOSITORY_CONFIG_MISMATCH",
   );
+});
+
+test("repository config accepts explicit target R&R without copied central policy", () => {
+  const config = validConfig();
+  config.ownership = {
+    source: "config",
+    fallback: "maintainer",
+    max_issue_assignees: 1,
+    max_pr_assignees: 3,
+    people: [{
+      github: "maintainer",
+      active: true,
+      responsibilities: { domains: ["frontend"], labels: ["area/frontend"], keywords: ["react"], paths: ["src/**"] },
+      review: { can_review: true, high_risk_domains: ["frontend"], high_risk_paths: ["src/auth/**"] },
+    }],
+  };
+  const result = validateRepositoryConfig(config);
+  assert.equal(result.ownership.people[0].github, "maintainer");
+  assert.equal(result.ownership.max_pr_assignees, 3);
 });

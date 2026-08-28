@@ -4,7 +4,8 @@ import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { matchesGlob, publish, stableStringify } from "./pipeline.mjs";
+import { analyzeRepositoryIssue } from "./cloud-analysis.mjs";
+import { evaluateRisk, matchesGlob, normalizeAgentOutput, publish, selectPrTeam, stableStringify } from "./pipeline.mjs";
 import {
   createCloudGitHubClient,
   dispatchAndVerifyCi,
@@ -54,7 +55,7 @@ function readRequest(filePath) {
   }
   exactKeys(value, [
     "version", "runtime_contract", "request_id", "repository", "issue", "iteration", "stage", "source_sha",
-    "subject_sha", "branch", "allowed_paths",
+    "subject_sha", "branch", "allowed_paths", "plan", "review",
   ], "request");
   requireCondition(value.version === 1 && value.runtime_contract === 1, "RUNTIME_CONTRACT_MISMATCH", "Publish request contract must be version 1");
   requireCondition(/^[A-Za-z0-9][A-Za-z0-9._-]{7,127}$/.test(value.request_id ?? ""), "INVALID_PUBLISH_REQUEST", "Invalid request_id");
@@ -66,7 +67,21 @@ function readRequest(filePath) {
   requireCondition(typeof value.branch === "string" && value.branch.startsWith(`agent/issue-${value.issue}-`) && !value.branch.includes("..") && !/\s/.test(value.branch), "UNSAFE_BRANCH", "Managed branch does not match the source Issue");
   requireCondition(Array.isArray(value.allowed_paths) && value.allowed_paths.length > 0 && value.allowed_paths.every((filePath) => typeof filePath === "string" && filePath && !filePath.startsWith("/") && !filePath.includes("..") && !filePath.includes("\\") && !filePath.includes("\0")), "INVALID_ALLOWED_PATHS", "allowed_paths must contain safe repository-relative paths");
   requireCondition(new Set(value.allowed_paths).size === value.allowed_paths.length, "INVALID_ALLOWED_PATHS", "allowed_paths must be unique");
-  return value;
+  let plan;
+  let review;
+  try {
+    plan = normalizeAgentOutput(value.plan, "plan");
+    review = normalizeAgentOutput(value.review, "review");
+  } catch (error) {
+    throw new CloudPublishError("INVALID_AGENT_ARTIFACT", error.message);
+  }
+  requireCondition(plan.issue === value.issue && plan.iteration === value.iteration && plan.phase === "plan",
+    "INVALID_AGENT_ARTIFACT", "Plan identity does not match the publish request");
+  requireCondition(plan.problems.length > 0 && plan.steps.length > 0 && plan.units.length === 0,
+    "INVALID_AGENT_ARTIFACT", "Plan must contain diagnosed problems and one unsplit implementation unit");
+  requireCondition(plan.changed_paths.length === value.allowed_paths.length && plan.changed_paths.every((filePath) => value.allowed_paths.includes(filePath)),
+    "INVALID_AGENT_ARTIFACT", "Plan changed_paths must exactly match allowed_paths");
+  return { ...value, plan, review };
 }
 
 function readValidation(filePath, request, expectedCommands) {
@@ -126,6 +141,14 @@ function changedLines(repo, sourceSha, head) {
   return total;
 }
 
+function riskReasonText(risk) {
+  const reasons = (risk.reasons ?? []).map((reason) => {
+    const values = (reason.values ?? []).join(", ");
+    return `${reason.type}${reason.category ? `/${reason.category}` : ""}${values ? `: ${values}` : ""}`;
+  });
+  return reasons.length ? reasons.join("; ") : "No deterministic high-risk signal";
+}
+
 export async function publishCloudRequest(options = {}) {
   const repo = resolve(options.repo ?? ".");
   const request = readRequest(options.request);
@@ -156,6 +179,16 @@ export async function publishCloudRequest(options = {}) {
   const lineCount = changedLines(repo, request.source_sha, head);
   requireCondition(lineCount <= 400, "CHANGE_SCOPE_FAILED", `Implementation changes ${lineCount} lines; maximum is 400`);
   const validations = readValidation(options.validation, request, compatibility.validation_commands);
+  requireCondition(request.plan.validation_commands.length === compatibility.validation_commands.length &&
+    request.plan.validation_commands.every((command, index) => command === compatibility.validation_commands[index]),
+  "INVALID_AGENT_ARTIFACT", "Plan validation commands do not match the live repository policy");
+  requireCondition(request.review.reviewed_sha === head, "STALE_AGENT_REVIEW", "Self-review must target the exact implementation HEAD");
+  const invalidFindingPaths = request.review.findings.filter((finding) => !actualPaths.includes(finding.path));
+  requireCondition(invalidFindingPaths.length === 0, "INVALID_AGENT_REVIEW",
+    `Review findings reference paths outside the implementation diff: ${invalidFindingPaths.map((finding) => finding.path).join(", ")}`);
+  const unresolvedLowRisk = request.review.findings.filter((finding) => finding.risk === "low" && finding.must_fix);
+  requireCondition(unresolvedLowRisk.length === 0, "UNRESOLVED_LOW_RISK_REVIEW",
+    `Low-risk must-fix findings must be resolved inside this Cloud task before publication: ${unresolvedLowRisk.map((finding) => finding.id).join(", ")}`);
   requireCondition(git(repo, ["status", "--porcelain=v1", "-z"]).length === 0, "DIRTY_WORKTREE", "Publication requires a clean worktree after validation and commit");
 
   const startingRemoteSha = remoteBranchSha(repo, request.branch);
@@ -163,17 +196,66 @@ export async function publishCloudRequest(options = {}) {
 
   await preflightGitHubCapabilities(request.repository, { ...options, repo });
   const { client } = createCloudGitHubClient(request.repository, options);
+  const issue = (await client.request("GET", client.repoPath(`/issues/${request.issue}`))).data;
+  requireCondition(issue?.number === request.issue && issue?.state === "open" && !issue?.pull_request,
+    "UNSAFE_ISSUE", "Source Issue must remain open at publication time");
+  const analysis = analyzeRepositoryIssue({ repo, compatibility, issue, changed_paths: actualPaths });
+  const risk = evaluateRisk(analysis.team, {
+    title: issue.title,
+    body: issue.body,
+    changed_paths: actualPaths,
+    risk: request.plan.risk,
+  });
+  const prTeam = selectPrTeam(analysis.team, {
+    changed_paths: actualPaths,
+    codegraph: analysis.codegraph,
+    issue_assignee: analysis.owner.assignee,
+    risk: risk.risk,
+  });
+  requireCondition(prTeam.assignees.length > 0, "NO_PR_ASSIGNEE", "R&R analysis did not produce an assignable PR team candidate");
+  requireCondition(prTeam.reviewer, "NO_PR_REVIEWER", "R&R analysis did not produce an eligible human reviewer");
+  const configuredLogins = new Set(analysis.team.people.filter((person) => person.active !== false).map((person) => person.github.toLowerCase()));
+  const review = {
+    ...request.review,
+    findings: request.review.findings.map((finding) => ({
+      ...finding,
+      human_owner: finding.risk === "high"
+        ? prTeam.reviewer ?? analysis.owner.assignee
+        : configuredLogins.has(String(finding.human_owner ?? "").toLowerCase()) ? finding.human_owner : null,
+    })),
+  };
+  const riskProblem = risk.risk === "high" ? [{
+    id: "P-900000001",
+    problem: "Deterministic risk policy requires human review of the current PR head",
+    risk: "high",
+    status: "HUMAN_REQUIRED",
+    evidence: riskReasonText(risk),
+    owner: prTeam.reviewer ?? analysis.owner.assignee,
+    next_step: "Review and approve the exact published head SHA",
+  }] : [];
   const publicationInput = {
     issue: request.issue,
     branch: request.branch,
     branch_prefix: "agent/issue-",
     changed_paths: actualPaths,
     repo,
-    title: `Fix #${request.issue}`,
-    summary: "Codex Cloud completed the bounded implementation and required validation.",
-    assignees: compatibility.ownership?.fallback ?? null,
-    reviewer: compatibility.ownership?.fallback ?? null,
-    plan: { steps: ["Implement the approved source Issue within its allowed path contract"], risk: "medium" },
+    title: `Fix #${request.issue}: ${String(issue.title ?? "Issue implementation").slice(0, 180)}`,
+    summary: `Codex Cloud completed the bounded implementation. Risk: ${risk.risk}. Reviewer: ${prTeam.reviewer ? `@${prTeam.reviewer}` : "human selection required"}.`,
+    pr_summary: [
+      "### Deterministic ownership and risk routing",
+      "",
+      `- Issue assignee: @${analysis.owner.assignee} (${analysis.owner.rationale})`,
+      `- PR assignees: ${prTeam.assignees.map((login) => `@${login}`).join(", ")}`,
+      `- Reviewer: ${prTeam.reviewer ? `@${prTeam.reviewer}` : prTeam.fallback_mention ?? "unavailable"}`,
+      `- Risk: **${risk.risk}** — ${riskReasonText(risk)}`,
+      `- CodeGraph: ${analysis.codegraph_summary.file_count} files / ${analysis.codegraph_summary.edge_count} edges`,
+    ].join("\n"),
+    assignees: prTeam.assignees,
+    max_assignees: analysis.team.pipeline.max_pr_assignees,
+    reviewer: prTeam.reviewer,
+    fallback_mention: prTeam.fallback_mention,
+    plan: request.plan,
+    risk,
     state: {
       issue: request.issue,
       branch: request.branch,
@@ -182,12 +264,17 @@ export async function publishCloudRequest(options = {}) {
       validation: { passed: true, commands: validations },
       protected_paths: { passed: true, matched: [] },
       change_scope: { passed: true, split_required: false, changed_lines: lineCount, target: 200, maximum: 400 },
-      problems: [],
+      assignee: analysis.owner.assignee,
+      reviewer: prTeam.reviewer,
+      plan: request.plan,
+      problems: [...request.plan.problems, ...riskProblem],
     },
     gate: { base_sha: request.source_sha },
   };
   const result = await publish(client, "pr", publicationInput);
   requireCondition(result.pr && result.pr_url, "PR_NOT_CONFIRMED", "GitHub did not return a pull request URL");
+  requireCondition(result.assignments?.assigned?.length > 0, "PR_ASSIGNEE_NOT_CONFIRMED", "GitHub did not confirm any selected PR assignee");
+  requireCondition(result.reviewer?.requested === prTeam.reviewer, "PR_REVIEWER_NOT_CONFIRMED", "GitHub did not confirm the selected PR reviewer");
 
   const remoteSha = remoteBranchSha(repo, request.branch);
   requireCondition(remoteSha === head, "REMOTE_SHA_MISMATCH", "Remote branch SHA does not match the local implementation commit");
@@ -196,6 +283,22 @@ export async function publishCloudRequest(options = {}) {
   requireCondition(pull?.head?.repo?.full_name === request.repository && pull?.base?.repo?.full_name === request.repository, "UNSAFE_PR_REPOSITORY", "Pull request is not same-repository");
   requireCondition(pull?.head?.ref === request.branch && pull?.head?.sha === head, "PR_HEAD_MISMATCH", "Pull request head does not match the published branch and SHA");
   requireCondition(pull?.state === "open" && pull?.merged !== true, "UNSAFE_PR_LIFECYCLE", "Pull request is not open and unmerged");
+
+  const reviewResult = await publish(client, "review", {
+    issue: request.issue,
+    pr: result.pr,
+    review,
+    reviewer: prTeam.reviewer,
+    fallback_mention: prTeam.fallback_mention,
+    evaluation: {
+      all_ok: risk.risk === "low" && review.verdict === "pass",
+      human_required: risk.risk === "high" || review.findings.some((finding) => finding.risk === "high"),
+      next_phase: risk.risk === "high" ? "human_required" : "review",
+    },
+    summary: risk.risk === "high"
+      ? `High-risk review evidence requires ${prTeam.reviewer ? `@${prTeam.reviewer}` : prTeam.fallback_mention ?? "a maintainer"}.`
+      : "Low-risk self-review comments were posted directly; human PR review remains required before merge.",
+  });
 
   const ci = await dispatchAndVerifyCi({
     version: 1,
@@ -218,9 +321,12 @@ export async function publishCloudRequest(options = {}) {
     draft: pull.draft === true,
     reused: result.reused === true,
     comments: {
-      issue: result.comment?.comment_id ?? null,
-      pull_request: result.summary?.id ?? null,
+      issue: reviewResult.comment?.comment_id ?? result.comment?.comment_id ?? null,
+      pull_request: reviewResult.summary?.id ?? result.summary?.id ?? null,
     },
+    ownership: { issue_assignee: analysis.owner.assignee, assignees: prTeam.assignees, reviewer: prTeam.reviewer },
+    risk,
+    review: { verdict: review.verdict, phase: reviewResult.phase, human_required: reviewResult.human_required, findings: review.findings.length },
     ci,
     completed_at: new Date().toISOString(),
     verified: false,
@@ -232,7 +338,7 @@ export async function publishCloudRequest(options = {}) {
     repository: request.repository,
     operation: "comment",
     number: request.issue,
-    body: `Verified publication complete: PR #${verified.pr} at ${verified.remote_sha}; required CI checks passed.`,
+    body: `Verified publication complete: PR #${verified.pr} at ${verified.remote_sha}; required CI checks passed. Deterministic risk is ${risk.risk}; review phase is ${reviewResult.phase}.`,
   }, options);
   return { ...verified, completion_comment: completion.comment_id };
 }

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { chmod, mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -77,6 +77,26 @@ exit 2
     subject_sha: sourceSha,
     branch: "agent/issue-1-fix",
     allowed_paths: ["src/app.js"],
+    plan: {
+      issue: 1,
+      iteration: 1,
+      phase: "plan",
+      risk: "low",
+      problems: [{
+        id: "P-001",
+        problem: "The implementation returns the old value",
+        risk: "low",
+        status: "PLANNED",
+        evidence: "src/app.js:1",
+        owner: null,
+        next_step: "Update the value and verify it",
+      }],
+      steps: ["Update the value", "Run validation"],
+      validation_commands: ["git diff --quiet HEAD --"],
+      changed_paths: ["src/app.js"],
+      units: [],
+    },
+    review: { verdict: "pass", reviewed_sha: headSha, findings: [] },
   }));
   const validation = join(directory, "validation.json");
   await writeFile(validation, JSON.stringify({
@@ -131,16 +151,32 @@ test("Cloud publisher confirms the pushed SHA and live REST pull request", async
     const path = `${parsed.pathname}${parsed.search}`;
     const method = options.method ?? "GET";
     if (method === "GET" && path === "/repos/owner/repo") return json({ full_name: "owner/repo", default_branch: "main" });
+    if (method === "GET" && path === "/repos/owner/repo/issues/1") return json({
+      number: 1,
+      state: "open",
+      title: "Update application value",
+      body: "The application returns the old value.",
+      labels: [{ name: "bug" }],
+      user: { login: "reporter" },
+    });
     if (method === "GET" && path.startsWith("/repos/owner/repo/pulls?")) return json([pull]);
     if (method === "GET" && path === "/repos/owner/repo/commits/main") return json({ sha: context.sourceSha });
     if (method === "GET" && path === "/repos/owner/repo/issues/1/comments?per_page=100&page=1") return json(comments);
     if (method === "GET" && path === `/repos/owner/repo/commits/${context.headSha}/check-runs?per_page=100`) return json({ check_runs: [
       { id: 50, name: "Test CI", status: "completed", conclusion: "success", head_sha: context.headSha, app: { slug: "github-actions" }, details_url: "https://github.com/owner/repo/actions/runs/50" },
     ] });
-    if (method === "GET" && path === "/repos/owner/repo/assignees/reviewer") return json({ login: "reviewer" });
+    if (method === "GET" && path === "/repos/owner/repo/assignees/reviewer") return new Response(null, { status: 204 });
     if (method === "PATCH" && path === "/repos/owner/repo/pulls/7") { pull = { ...pull, ...JSON.parse(options.body) }; return json(pull); }
     if (method === "POST" && path === "/repos/owner/repo/pulls/7/requested_reviewers") return json({ requested_reviewers: [{ login: "reviewer" }] }, 201);
-    if (method === "PATCH" && path === "/repos/owner/repo/issues/7") return json({ number: 7, assignees: [{ login: "reviewer" }] });
+    if (method === "POST" && path === "/repos/owner/repo/issues/7/assignees") return json({ number: 7, assignees: [{ login: "reviewer" }] });
+    if (method === "PATCH" && path.startsWith("/repos/owner/repo/issues/comments/")) {
+      const id = Number(path.split("/").at(-1));
+      const comment = { ...commentById.get(id), body: JSON.parse(options.body).body, updated_at: new Date().toISOString() };
+      const index = comments.findIndex((candidate) => candidate.id === id);
+      if (index >= 0) comments[index] = comment;
+      commentById.set(id, comment);
+      return json(comment);
+    }
     if (method === "POST" && path === "/repos/owner/repo/issues/1/comments") {
       const body = JSON.parse(options.body).body;
       const id = comments.length === 0 ? 11 : 13;
@@ -167,6 +203,10 @@ test("Cloud publisher confirms the pushed SHA and live REST pull request", async
     assert.equal(result.draft, true);
     assert.equal(result.reused, true);
     assert.equal(result.completion_comment, 13);
+    assert.equal(result.ownership.issue_assignee, "reviewer");
+    assert.equal(result.ownership.reviewer, "reviewer");
+    assert.equal(result.risk.risk, "low");
+    assert.deepEqual(result.review, { verdict: "pass", phase: "review", human_required: false, findings: 0 });
   } finally {
     process.env.PATH = priorPath;
     if (priorRemoteBefore === undefined) delete process.env.TEST_REMOTE_BEFORE; else process.env.TEST_REMOTE_BEFORE = priorRemoteBefore;
@@ -190,6 +230,30 @@ test("Cloud publisher rejects validation evidence that differs from target polic
   );
 });
 
+test("Cloud publisher requires low-risk must-fix findings to be fixed in the same task", async () => {
+  const context = await fixture();
+  const request = JSON.parse(await readFile(context.request, "utf8"));
+  request.review = {
+    verdict: "fix_required",
+    reviewed_sha: context.headSha,
+    findings: [{
+      id: "P-002",
+      path: "src/app.js",
+      line: 1,
+      problem: "The low-risk regression still needs a correction",
+      risk: "low",
+      must_fix: true,
+      suggested_fix: "Correct it and rerun the final self-review",
+      human_owner: null,
+    }],
+  };
+  await writeFile(context.request, JSON.stringify(request));
+  await assert.rejects(
+    publishCloudRequest({ repo: context.repo, request: context.request, validation: context.validation }),
+    (error) => error.code === "UNRESOLVED_LOW_RISK_REVIEW" && /P-002/.test(error.message),
+  );
+});
+
 test("Cloud publisher fails closed for a target-defined protected path", async () => {
   const context = await fixture();
   await writeFile(join(context.repo, ".github/prarness.yml"), `version: 1
@@ -198,6 +262,9 @@ runtime:
 publication:
   mode: codex_cloud_direct
   branch_prefix: agent/issue-
+ownership:
+  source: codeowners
+  fallback: reviewer
 validation:
   commands:
     - git diff --quiet HEAD --
