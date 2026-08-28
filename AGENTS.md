@@ -12,10 +12,14 @@ maintenance after an explicit user request.
 Codex Cloud workers are expected to manage the source Issue, canonical
 comments, `agent/issue-*` branch, commit, draft pull request, and configured CI
 directly. The Cloud environment installs the pinned repository-independent
-runtime before the agent phase. First run
+bootstrap and refreshes the repository App credential before the agent phase.
+The exact human Issue/PR command then self-installs the canonical intake
+runtime SHA without rewriting that credential. Run its
 `$HOME/.local/bin/prarness-github-setup --verify OWNER/REPO`, then run
 `$HOME/.local/bin/prarness-session prepare` with the repository, source Issue,
-and bootstrap PR from the task. Follow the returned pinned
+and the exact managed branch from the first Issue task or canonical PR from a
+later task. On the first run, prepare uses the verified repository GitHub App
+to create or reuse the draft PR and check out its branch. Follow the returned pinned
 `prompts/cloud-session.md` contract through validation and publication. Use
 `prarness-github` for separately verified Issue, comment, CI, deployment, and
 reconcile operations instead of asking a person to log in. Keep writes scoped

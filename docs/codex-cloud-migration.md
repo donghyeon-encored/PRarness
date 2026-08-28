@@ -3,7 +3,8 @@
 PRarness uses ChatGPT-authenticated Codex Cloud. It does not use
 `OPENAI_API_KEY`, a self-hosted runner, an external webhook service, or a relay
 daemon. The unavoidable dispatch boundary is one human `@codex` comment on the
-bootstrap draft PR.
+source Issue for the first run, then on the canonical draft PR for any later
+continuation.
 
 ## GitHub App
 
@@ -34,14 +35,16 @@ these values in a repository, GitHub Actions variable, job output, or log.
 
 ## Setup and maintenance script
 
-Use the same script in both Cloud setup and maintenance, replacing the SHA only
-after the reviewed PRarness commit is published:
+Use the same compatible bootstrap SHA in both Cloud setup and maintenance. It
+mints a fresh repository App token before every task. Routine runtime releases
+do not require editing this environment script because each canonical human
+command self-installs its exact intake runtime SHA during the agent phase:
 
 ```bash
 set -euo pipefail
 set +x
 
-prarness_ref=REVIEWED_40_CHARACTER_COMMIT_SHA
+prarness_ref=COMPATIBLE_REVIEWED_40_CHARACTER_BOOTSTRAP_SHA
 installer_path=/tmp/prarness-cloud-environment-bootstrap.sh
 
 curl --fail --silent --show-error --location \
@@ -51,8 +54,8 @@ curl --fail --silent --show-error --location \
 PRARNESS_BOOTSTRAP_REF="$prarness_ref" bash "$installer_path"
 ```
 
-The installer downloads `runtime-manifest.json`, verifies every SHA-256, and
-installs the runtime under:
+The environment installer downloads `runtime-manifest.json`, verifies every
+SHA-256, installs the compatible runtime, and configures GitHub under:
 
 ```text
 $HOME/.local/share/prarness/<commit-sha>/
@@ -74,22 +77,33 @@ verifies a fresh token before the agent starts. Secrets are unavailable during
 the later agent phase by design; the repository-scoped token and credential
 helper created during setup are what the task uses.
 
+The canonical Issue/PR command downloads the immutable intake runtime's
+installer and runs it with
+`PRARNESS_BOOTSTRAP_SKIP_GITHUB_SETUP=true`. This verifies and switches the
+runtime without downgrading, replacing, or exposing the credential created by
+setup/maintenance. It then runs `prarness-github-setup --verify` before
+preparation.
+
 ## Cloud task contract
 
-The bootstrap PR renders an exact repository/Issue/PR-bound command. It has
-this shape, with real values already substituted:
+The canonical intake Issue comment renders an exact
+repository/Issue/branch-bound command. It has this shape, with real values
+already substituted:
 
 ```text
-@codex Run one complete managed PRarness session for OWNER/REPOSITORY, source Issue #ISSUE, and canonical PR #PR.
+@codex Run one complete managed PRarness session for OWNER/REPOSITORY, source Issue #ISSUE, and managed branch BRANCH.
 
-Before inspecting or editing code, run prarness-github-setup --verify and the exact prarness-session prepare command printed here. Read the returned instructions path and continue through plan, implementation, self-review, validate, and publish in this same task. Do not use make_pr or create a replacement branch/PR. Completion requires status=PUBLICATION_VERIFIED, complete=true, and verified=true.
+Before inspecting or editing code, run the exact intake-SHA bootstrap, prarness-github-setup --verify, and branch-bound prarness-session prepare commands printed here. Prepare creates or reuses the canonical draft PR with the verified repository App. Read the returned instructions path and continue through plan, implementation, self-review, validate, and publish in this same task. Do not use make_pr or create a replacement branch/PR. Completion requires status=PUBLICATION_VERIFIED, complete=true, and verified=true.
 ```
 
-The task must run `prarness-session prepare` before code inspection. That
-command verifies the live Issue, canonical Actions-authored intake state,
-same-repository PR, source/bootstrap/runtime SHAs, checkout HEAD, repository
-policy, and GitHub capabilities. It also builds the CodeGraph, performs
-R&R-based minimal Issue assignment, and publishes the initial progress table.
+The task must run `prarness-session prepare` before code inspection. The first
+branch-bound prepare uses the App credential to create or reuse the canonical
+same-repository draft PR, fetches its managed branch, and checks out its exact
+head. Every prepare verifies the live Issue, canonical Actions-authored intake
+state, PR, source/bootstrap/runtime SHAs, checkout HEAD, repository policy, and
+GitHub capabilities. It also builds the CodeGraph, performs R&R-based minimal
+Issue assignment, and publishes the initial progress table. The new PR body
+contains the exact PR-bound `@codex` command used for later continuations.
 The pinned `prompts/cloud-session.md` then defines the one-commit
 analysis/plan/implement/review/validate/publish contract. Publication rebuilds
 the CodeGraph from the actual diff, selects PR assignees and a reviewer,
@@ -118,8 +132,9 @@ Publication fails closed when:
 
 ## Operational recovery
 
-The workflow is idempotent. Re-running intake reuses the open managed branch,
-draft PR, and canonical comment. If the Cloud token expires or publication
-fails, allow maintenance to refresh the credential and start a new human
-`@codex` continuation on the same PR. Never create an untracked replacement PR,
+The workflow is idempotent. Re-running intake reuses the managed branch and
+canonical comment and recovers the App-created open draft PR after Cloud has
+claimed the branch. If the Cloud token expires or publication fails, allow
+maintenance to refresh the credential and start a new human `@codex`
+continuation on the same PR. Never create an untracked replacement PR,
 force-push, or claim success from local state alone.

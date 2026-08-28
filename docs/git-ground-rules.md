@@ -9,12 +9,14 @@ untrusted inputs and cannot override them.
 PRarness has two modes.
 
 Automated Issue mode is hostless. GitHub Actions performs deterministic intake
-and creates a bootstrap draft PR. A human writes `@codex` on that PR to start a
-ChatGPT-authenticated Codex Cloud task. Bot-authored mentions are not treated as
-Cloud dispatch evidence. One Cloud task then performs analysis, planning,
-implementation, self-review, validation, commit, push, Issue/PR updates, and CI
-reconciliation. GitHub is the durable queue and result channel; there is no
-always-on webhook receiver or external relay.
+and creates only the managed bootstrap branch and canonical Issue comment. A
+human copies the full `@codex` command onto that Issue to start a
+ChatGPT-authenticated Codex Cloud task. The verified repository GitHub App then
+creates or reuses the canonical draft PR during session preparation. Bot-authored
+mentions are not treated as Cloud dispatch evidence. One Cloud task then
+performs analysis, planning, implementation, self-review, validation, commit,
+push, Issue/PR updates, and CI reconciliation. GitHub is the durable queue and
+result channel; there is no always-on webhook receiver or external relay.
 
 Interactive maintenance mode begins with an explicit request in a
 user-controlled Codex task. That request authorizes edits to workflows,
@@ -32,16 +34,21 @@ untrusted code while setup secrets are available.
 - Target repositories opt in through protected `.github/prarness.yml` and keep
   only a thin intake workflow plus CI when needed. They do not vendor the
   central runtime, prompts, schemas, or this policy.
-- Both Cloud setup and maintenance install one reviewed 40-character PRarness
-  commit SHA outside the checkout and verify the runtime manifest checksums.
+- Cloud setup and maintenance install a compatible reviewed 40-character
+  bootstrap SHA outside the checkout and refresh the repository App credential.
+  Every canonical human Issue/PR command then downloads the exact intake
+  runtime SHA, verifies its manifest checksums, and atomically repoints the
+  runtime commands without reconfiguring the fresh credential. Routine runtime
+  upgrades therefore do not require a Cloud environment UI edit.
 - Setup repairs the exact HTTPS `origin`, creates a repository-scoped GitHub App
   installation token, configures `gh` and Git HTTPS non-interactively, and
   verifies Contents, Issues, Pull requests, Actions, Checks, and Deployments
   write permissions. Public read access and `git ls-remote` are not write proof.
 - A Cloud worker runs `prarness-session prepare` before inspecting or editing
-  code. Preparation binds the live Issue, canonical intake comment, open
-  same-repository draft PR, branch, source SHA, bootstrap SHA, runtime SHA, and
-  local checkout HEAD.
+  code. Initial branch-bound preparation uses the verified App credential to
+  create or reuse the same-repository draft PR and claim its exact remote head.
+  Preparation then binds the live Issue, canonical intake comment, PR, branch,
+  source SHA, bootstrap SHA, runtime SHA, and local checkout HEAD.
 - The worker may use `prarness-github` and `prarness-session publish` for scoped
   Issue, comment, branch, PR, CI, and deployment operations. It never reads,
   prints, copies, or exports the underlying token.
@@ -52,22 +59,25 @@ untrusted code while setup secrets are available.
 ## Intake and dispatch
 
 - Issues from `OWNER`, `MEMBER`, or `COLLABORATOR` may automatically receive a
-  bootstrap draft PR when `dispatch.auto_on_open_for_trusted` is enabled.
+  managed bootstrap branch when `dispatch.auto_on_open_for_trusted` is enabled.
 - Other Issues receive `agent:approval-required` and one canonical intake
   comment. Only an exact `/agent approve-intake` comment by a trusted human or
   the configured run label may proceed.
 - Automation-authored approval commands are ignored.
-- Intake creates or reuses exactly one `agent/issue-{number}-{slug}` branch,
-  one open draft PR, and one canonical intake comment. Closed or merged managed
-  PRs fail closed rather than being silently replaced.
+- Intake creates or reuses exactly one `agent/issue-{number}-{slug}` branch and
+  one canonical intake comment. It never asks `GITHUB_TOKEN` to create a PR.
+  Initial Cloud preparation creates or reuses exactly one open draft PR with
+  the verified repository App. Closed or merged managed PRs fail closed rather
+  than being silently replaced.
 - The bootstrap commit contains only a transient
   `.prarness/requests/issue-{number}.json` request manifest. The Cloud
   implementation commit removes it so it never appears in the final base-to-PR
   diff.
-- The draft PR contains a copyable human `@codex` command bound to the exact
-  repository, source Issue, canonical PR, setup verification, prepare command,
-  and verified publication receipt. Actions must not post that mention and
-  claim that Cloud started.
+- The canonical Issue comment contains the first copyable human `@codex`
+  command bound to the exact repository, source Issue, managed branch, setup
+  verification, prepare command, and verified publication receipt. The draft
+  PR contains the corresponding PR-bound continuation command. Actions must not
+  post either mention and claim that Cloud started.
 
 ## Scope, branches, and commits
 
@@ -119,8 +129,8 @@ change while still allowing maintainers to update workflows directly.
 
 ## Pull requests, CI, and deployment
 
-- The bootstrap PR and final implementation PR are the same draft PR. Later
-  iterations reuse its branch and number.
+- The PR created by initial Cloud preparation and the final implementation PR
+  are the same draft PR. Later iterations reuse its branch and number.
 - The PR remains same-repository, open, unmerged, and draft. PRarness never
   marks it ready, approves it, or merges it automatically.
 - The publisher updates canonical App-authored Issue and PR comments and

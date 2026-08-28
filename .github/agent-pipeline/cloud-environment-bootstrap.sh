@@ -85,4 +85,13 @@ ln -sfn "${version_dir}/cloud-github.mjs" "${install_dir}/prarness-github"
 ln -sfn "${version_dir}/cloud-publish.mjs" "${install_dir}/prarness-publish"
 ln -sfn "${version_dir}/cloud-session.mjs" "${install_dir}/prarness-session"
 
+case ${PRARNESS_BOOTSTRAP_SKIP_GITHUB_SETUP:-false} in
+  true) exit 0 ;;
+  false) ;;
+  *)
+    echo 'PRARNESS_BOOTSTRAP_SKIP_GITHUB_SETUP must be true or false.' >&2
+    exit 2
+    ;;
+esac
+
 "${install_dir}/prarness-github-setup" "$@"

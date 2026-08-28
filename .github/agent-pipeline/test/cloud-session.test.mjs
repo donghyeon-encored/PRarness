@@ -58,22 +58,42 @@ ci:
     branch: "agent/issue-1-fix",
     source_sha: sourceSha,
     runtime_ref: runtimeRef,
+    runtime_repository: "donghyeon-encored/PRarness",
     dispatch: "human_pr_mention",
   };
   await writeFile(join(repo, ".prarness/requests/issue-1.json"), `${JSON.stringify(manifest)}\n`);
   await exec("git", ["add", ".prarness/requests/issue-1.json"], { cwd: repo });
   await exec("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "bootstrap"], { cwd: repo });
   const bootstrapSha = (await exec("git", ["rev-parse", "HEAD"], { cwd: repo })).stdout.trim();
-  const state = { version: 2, issue: 1, phase: "WAITING_FOR_CODEX", branch: "agent/issue-1-fix", pr: 7, source_sha: sourceSha, bootstrap_sha: bootstrapSha, runtime_ref: runtimeRef };
+  const remote = join(directory, "remote.git");
+  await exec("git", ["init", "-q", "--bare", remote], { cwd: directory });
+  await exec("git", ["remote", "add", "origin", remote], { cwd: repo });
+  await exec("git", ["push", "-q", "origin", "main", "agent/issue-1-fix"], { cwd: repo });
+  const intakeState = { version: 2, issue: 1, phase: "WAITING_FOR_CODEX", branch: "agent/issue-1-fix", pr: 7, base: "main", source_sha: sourceSha, bootstrap_sha: bootstrapSha, runtime_ref: runtimeRef, runtime_repository: "donghyeon-encored/PRarness" };
+  const api = {
+    calls: [],
+    intakeState,
+    pull: {
+      number: 7,
+      html_url: "https://github.com/owner/repo/pull/7",
+      body: "managed",
+      state: "open",
+      merged: false,
+      draft: true,
+      head: { ref: "agent/issue-1-fix", sha: bootstrapSha, repo: { full_name: "owner/repo" } },
+      base: { ref: "main", sha: sourceSha, repo: { full_name: "owner/repo" } },
+    },
+  };
   const client = {
     botLogin: "app[bot]",
     repoPath: (suffix = "") => `/repos/owner/repo${suffix}`,
     paginate: async () => [{
       id: 11,
       user: { login: "github-actions[bot]", type: "Bot" },
-      body: `state\n\n<!-- prarness-intake-state:v2 ${JSON.stringify(state)} -->\n<!-- prarness-intake:v2 issue=1 -->`,
+      body: `state\n\n<!-- prarness-intake-state:v2 ${JSON.stringify(api.intakeState)} -->\n<!-- prarness-intake:v2 issue=1 -->`,
     }],
     request: async (method, path, options = {}) => {
+      api.calls.push({ method, path, body: options.body });
       if (method === "GET" && path.endsWith("/issues/1")) return { data: {
         number: 1,
         state: "open",
@@ -82,13 +102,26 @@ ci:
         labels: [{ name: "bug" }],
         user: { login: "reporter" },
       } };
-      if (path.endsWith("/pulls/7")) return { data: {
-        number: 7,
-        state: "open",
-        merged: false,
-        head: { ref: "agent/issue-1-fix", sha: bootstrapSha, repo: { full_name: "owner/repo" } },
-        base: { ref: "main", sha: sourceSha, repo: { full_name: "owner/repo" } },
-      } };
+      if (method === "GET" && path === "/repos/owner/repo") return { data: { default_branch: "main" } };
+      if (method === "GET" && path.startsWith("/repos/owner/repo/pulls?")) return { data: api.pull ? [api.pull] : [] };
+      if (method === "POST" && path === "/repos/owner/repo/pulls") {
+        api.pull = {
+          number: 7,
+          html_url: "https://github.com/owner/repo/pull/7",
+          body: options.body.body,
+          state: "open",
+          merged: false,
+          draft: options.body.draft,
+          head: { ref: options.body.head, sha: bootstrapSha, repo: { full_name: "owner/repo" } },
+          base: { ref: options.body.base, sha: sourceSha, repo: { full_name: "owner/repo" } },
+        };
+        return { status: 201, data: api.pull };
+      }
+      if (method === "PATCH" && path === "/repos/owner/repo/pulls/7") {
+        api.pull = { ...api.pull, ...options.body };
+        return { status: 200, data: api.pull };
+      }
+      if (method === "GET" && path === "/repos/owner/repo/pulls/7") return { data: api.pull };
       if (method === "GET" && path.endsWith("/assignees/reviewer")) return { status: 204, data: null };
       if (method === "POST" && path.endsWith("/issues/1/assignees")) return { status: 201, data: { assignees: options.body.assignees } };
       if (method === "POST" && path.endsWith("/issues/1/comments")) return { status: 201, data: {
@@ -99,7 +132,7 @@ ci:
       throw new Error(`Unhandled request ${path}`);
     },
   };
-  return { bootstrapSha, client, directory, repo, runtimeRef, sourceSha };
+  return { api, bootstrapSha, client, directory, repo, runtimeRef, sourceSha };
 }
 
 test("Cloud session binds the checkout to the canonical intake state", async () => {
@@ -120,6 +153,7 @@ test("Cloud session binds the checkout to the canonical intake state", async () 
     assert.equal(session.source_sha, context.sourceSha);
     assert.equal(session.subject_sha, context.bootstrapSha);
     assert.equal(session.runtime_ref, context.runtimeRef);
+    assert.equal(session.runtime_repository, "donghyeon-encored/PRarness");
     assert.equal(session.iteration, 1);
     assert.equal(session.request_manifest, ".prarness/requests/issue-1.json");
     assert.deepEqual(session.existing_changed_paths, []);
@@ -148,6 +182,7 @@ test("Cloud session rejects a checkout that differs from the live PR head", asyn
       number: 7,
       state: "open",
       merged: false,
+      draft: true,
       head: { ref: "agent/issue-1-fix", sha: "b".repeat(40), repo: { full_name: "owner/repo" } },
       base: { ref: "main", sha: context.sourceSha, repo: { full_name: "owner/repo" } },
     } };
@@ -157,6 +192,40 @@ test("Cloud session rejects a checkout that differs from the live PR head", asyn
     prepareCloudSession({ repository: "owner/repo", issue: 1, pr: 7, repo: context.repo, client: context.client, skip_preflight: true }),
     (error) => error.code === "CHECKOUT_SHA_MISMATCH",
   );
+});
+
+test("Cloud session creates the canonical draft PR and claims the managed branch", async () => {
+  const context = await fixture();
+  context.api.intakeState.pr = null;
+  context.api.pull = null;
+  await exec("git", ["switch", "-q", "main"], { cwd: context.repo });
+  const priorBotLogin = process.env.AGENT_APP_BOT_LOGIN;
+  process.env.AGENT_APP_BOT_LOGIN = "app[bot]";
+  try {
+    const session = await prepareCloudSession({
+      repository: "owner/repo",
+      issue: 1,
+      branch: "agent/issue-1-fix",
+      repo: context.repo,
+      client: context.client,
+      skip_preflight: true,
+    });
+    assert.equal(session.pr, 7);
+    assert.equal(session.branch, "agent/issue-1-fix");
+    assert.equal(session.subject_sha, context.bootstrapSha);
+    assert.equal((await exec("git", ["rev-parse", "HEAD"], { cwd: context.repo })).stdout.trim(), context.bootstrapSha);
+    const create = context.api.calls.find((call) => call.method === "POST" && call.path === "/repos/owner/repo/pulls");
+    assert.equal(create.body.draft, true);
+    assert.equal(create.body.head, "agent/issue-1-fix");
+    const update = context.api.calls.find((call) => call.method === "PATCH" && call.path === "/repos/owner/repo/pulls/7");
+    assert.match(update.body.body, new RegExp(`PRARNESS_BOOTSTRAP_REF=${context.runtimeRef}`));
+    assert.match(update.body.body, /PRARNESS_BOOTSTRAP_SKIP_GITHUB_SETUP=true/);
+    assert.match(update.body.body, /--repository owner\/repo --issue 1 --pr 7/);
+    assert.match(update.body.body, /Do not use `make_pr`/);
+  } finally {
+    if (priorBotLogin === undefined) delete process.env.AGENT_APP_BOT_LOGIN;
+    else process.env.AGENT_APP_BOT_LOGIN = priorBotLogin;
+  }
 });
 
 test("Cloud session CLI cannot bypass capability preflight", async () => {

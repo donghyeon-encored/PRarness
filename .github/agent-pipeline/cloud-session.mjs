@@ -6,12 +6,14 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { analyzeRepositoryIssue } from "./cloud-analysis.mjs";
+import { managedPullBody } from "./cloud-contract.mjs";
 import { createCloudGitHubClient, preflightGitHubCapabilities } from "./cloud-github.mjs";
 import { publishCloudRequest } from "./cloud-publish.mjs";
 import { normalizeAgentOutput, publish, stableStringify } from "./pipeline.mjs";
 import { checkRepositoryCompatibility } from "./repository-check.mjs";
 
 const STATE_PATTERN = /<!-- prarness-intake-state:v2 (\{[^\n]*\}) -->/;
+const DEFAULT_RUNTIME_REPOSITORY = "donghyeon-encored/PRarness";
 
 export class CloudSessionError extends Error {
   constructor(code, message) {
@@ -31,6 +33,10 @@ function safeRepository(value) {
 
 function safePath(value) {
   return typeof value === "string" && value && !value.startsWith("/") && !value.includes("..") && !value.includes("\\") && !value.includes("\0");
+}
+
+function safeBranch(value, issue) {
+  return typeof value === "string" && value.startsWith(`agent/issue-${issue}-`) && /^[A-Za-z0-9._/-]+$/.test(value);
 }
 
 function gitPaths(repo, source, head) {
@@ -87,39 +93,107 @@ function verifyPinnedRuntime(runtimeRef, executable) {
   requireCondition(actual.includes(`/prarness/${runtimeRef}/`), "RUNTIME_REF_MISMATCH", "prarness-session is not running from the runtime SHA recorded by intake");
 }
 
+async function ensureCloudPullRequest(client, { repository, issue, title, branch, base, runtimeRef, runtimeRepository }) {
+  const owner = repository.split("/")[0];
+  const response = await client.request("GET", client.repoPath(`/pulls?state=all&head=${encodeURIComponent(`${owner}:${branch}`)}&base=${encodeURIComponent(base)}&per_page=100`));
+  const pulls = Array.isArray(response.data) ? response.data : [];
+  requireCondition(pulls.length <= 1, "DUPLICATE_MANAGED_PR", "More than one pull request exists for the managed branch");
+  let pull = pulls[0] ?? null;
+  if (pull) {
+    requireCondition(pull.state === "open" && pull.merged !== true && pull.draft === true,
+      "CLOSED_MANAGED_PR", "The canonical managed pull request is closed, merged, or no longer draft");
+  } else {
+    const created = await client.request("POST", client.repoPath("/pulls"), {
+      body: {
+        title: `Draft: ${String(title ?? `Issue #${issue}`).slice(0, 180)}`,
+        body: `Closes #${issue}\n\nPRarness is finalizing the managed Cloud dispatch contract.`,
+        head: branch,
+        base,
+        draft: true,
+      },
+    });
+    requireCondition(Number.isInteger(created.data?.number) && created.data?.html_url, "PR_NOT_CONFIRMED",
+      "The repository GitHub App did not confirm the bootstrap pull request");
+    pull = created.data;
+  }
+  const body = managedPullBody(repository, issue, pull.number, runtimeRef, runtimeRepository);
+  if (pull.body !== body) {
+    const updated = await client.request("PATCH", client.repoPath(`/pulls/${pull.number}`), { body: { body } });
+    requireCondition(updated.data?.number === pull.number && updated.data?.body === body, "PR_BODY_NOT_CONFIRMED",
+      "The repository GitHub App did not confirm the managed Cloud dispatch contract");
+    pull = updated.data;
+  }
+  return pull;
+}
+
+function checkoutManagedHead(repo, branch, expectedSha) {
+  requireCondition(git(repo, ["status", "--porcelain=v1", "-z"]).length === 0, "DIRTY_WORKTREE",
+    "Cloud checkout must be clean before claiming the managed branch");
+  git(repo, ["fetch", "--no-tags", "origin", `refs/heads/${branch}:refs/remotes/origin/${branch}`]);
+  const fetched = git(repo, ["rev-parse", `refs/remotes/origin/${branch}`]);
+  requireCondition(fetched === expectedSha, "REMOTE_SHA_MISMATCH", "Fetched managed branch does not match the live GitHub head");
+  if (git(repo, ["rev-parse", "HEAD"]) !== expectedSha) git(repo, ["switch", "--detach", expectedSha]);
+}
+
 export async function prepareCloudSession(options = {}) {
   const repo = resolve(options.repo ?? ".");
   const repository = String(options.repository ?? "");
   const issueNumber = Number(options.issue);
-  const prNumber = Number(options.pr);
+  const requestedPr = options.pr === undefined ? null : Number(options.pr);
+  const requestedBranch = options.branch === undefined ? null : String(options.branch);
   requireCondition(safeRepository(repository), "INVALID_REPOSITORY", "repository must use owner/repository format");
-  requireCondition(Number.isInteger(issueNumber) && issueNumber > 0 && Number.isInteger(prNumber) && prNumber > 0,
-    "INVALID_SESSION_TARGET", "prepare requires positive Issue and PR numbers");
+  requireCondition(Number.isInteger(issueNumber) && issueNumber > 0, "INVALID_SESSION_TARGET", "prepare requires a positive Issue number");
+  requireCondition((Number.isInteger(requestedPr) && requestedPr > 0) !== Boolean(requestedBranch), "INVALID_SESSION_TARGET",
+    "prepare requires exactly one positive --pr number or managed --branch");
+  if (requestedBranch) requireCondition(safeBranch(requestedBranch, issueNumber), "INVALID_SESSION_TARGET", "prepare branch is not managed by the source Issue");
   const compatibility = checkRepositoryCompatibility({ repo, repository, config: options.config ?? ".github/prarness.yml" });
   if (!options.skip_preflight) await preflightGitHubCapabilities(repository, options);
   const { client } = options.client
     ? { client: options.client }
     : createCloudGitHubClient(repository, options);
-  const [issueResponse, pullResponse, comments] = await Promise.all([
+  const [issueResponse, comments] = await Promise.all([
     client.request("GET", client.repoPath(`/issues/${issueNumber}`)),
-    client.request("GET", client.repoPath(`/pulls/${prNumber}`)),
     client.paginate(client.repoPath(`/issues/${issueNumber}/comments`)),
   ]);
   const issue = issueResponse.data;
-  const pull = pullResponse.data;
   requireCondition(issue?.number === issueNumber && issue?.state === "open" && !issue?.pull_request, "UNSAFE_ISSUE", "Source Issue must exist and remain open");
-  requireCondition(pull?.number === prNumber && pull?.state === "open" && pull?.merged !== true, "UNSAFE_PR", "Canonical pull request must exist and remain open");
-  requireCondition(pull?.head?.repo?.full_name === repository && pull?.base?.repo?.full_name === repository, "UNSAFE_PR", "Canonical pull request must be same-repository");
-  const branch = String(pull?.head?.ref ?? "");
-  requireCondition(branch.startsWith(`agent/issue-${issueNumber}-`), "UNSAFE_PR", "Pull request branch does not match its source Issue");
   const state = parseStateComment(comments, issueNumber);
-  requireCondition(state.pr === prNumber && state.branch === branch, "INTAKE_STATE_MISMATCH", "Canonical intake state does not match the pull request");
+  requireCondition(typeof state.branch === "string" && safeBranch(state.branch, issueNumber), "INVALID_INTAKE_STATE", "Canonical intake state has no managed branch");
   requireCondition(/^[0-9a-f]{40}$/.test(state.source_sha ?? "") && /^[0-9a-f]{40}$/.test(state.bootstrap_sha ?? "") && /^[0-9a-f]{40}$/.test(state.runtime_ref ?? ""),
     "INVALID_INTAKE_STATE", "Canonical intake state is missing source, bootstrap, or runtime SHA");
+  const runtimeRepository = String(state.runtime_repository ?? DEFAULT_RUNTIME_REPOSITORY);
+  requireCondition(safeRepository(runtimeRepository), "INVALID_INTAKE_STATE", "Canonical intake state has an invalid runtime repository");
+  let pull;
+  if (requestedPr !== null) {
+    pull = (await client.request("GET", client.repoPath(`/pulls/${requestedPr}`))).data;
+  } else {
+    requireCondition(requestedBranch === state.branch, "INTAKE_STATE_MISMATCH", "Requested branch does not match canonical intake state");
+    const repositoryResponse = await client.request("GET", client.repoPath(""));
+    const base = String(state.base ?? repositoryResponse.data?.default_branch ?? "");
+    requireCondition(base && !base.includes("..") && !/\s/.test(base), "INVALID_DEFAULT_BRANCH", "GitHub did not return a safe default branch");
+    pull = await ensureCloudPullRequest(client, {
+      repository,
+      issue: issueNumber,
+      title: issue.title,
+      branch: state.branch,
+      base,
+      runtimeRef: state.runtime_ref,
+      runtimeRepository,
+    });
+  }
+  const prNumber = Number(pull?.number);
+  requireCondition(pull?.number === prNumber && pull?.state === "open" && pull?.merged !== true && pull?.draft === true,
+    "UNSAFE_PR", "Canonical pull request must exist, remain open, and remain draft");
+  requireCondition(pull?.head?.repo?.full_name === repository && pull?.base?.repo?.full_name === repository, "UNSAFE_PR", "Canonical pull request must be same-repository");
+  const branch = String(pull?.head?.ref ?? state.branch);
+  requireCondition(branch.startsWith(`agent/issue-${issueNumber}-`), "UNSAFE_PR", "Pull request branch does not match its source Issue");
+  requireCondition((state.pr === null || state.pr === prNumber) && state.branch === branch, "INTAKE_STATE_MISMATCH", "Canonical intake state does not match the pull request");
+  if (requestedBranch) checkoutManagedHead(repo, branch, String(pull.head.sha ?? ""));
   const manifest = readOptionalManifest(repo, issueNumber);
   if (manifest) {
     requireCondition(manifest.version === 2 && manifest.repository === repository && manifest.issue === issueNumber && manifest.branch === branch &&
-      manifest.source_sha === state.source_sha && manifest.runtime_ref === state.runtime_ref,
+      manifest.source_sha === state.source_sha && manifest.runtime_ref === state.runtime_ref &&
+      String(manifest.runtime_repository ?? DEFAULT_RUNTIME_REPOSITORY) === runtimeRepository,
     "REQUEST_MANIFEST_MISMATCH", "Tracked request manifest does not match canonical intake state");
   }
   const head = git(repo, ["rev-parse", "HEAD"]);
@@ -184,6 +258,7 @@ export async function prepareCloudSession(options = {}) {
     subject_sha: head,
     bootstrap_sha: state.bootstrap_sha,
     runtime_ref: state.runtime_ref,
+    runtime_repository: runtimeRepository,
     instructions_path: instructionsPath,
     iteration: commitsAfterBase,
     request_manifest: requestManifest,
@@ -227,6 +302,7 @@ function readSession(path) {
     Number.isInteger(value.iteration) && value.iteration > 0 &&
     /^[0-9a-f]{40}$/.test(value.source_sha ?? "") && /^[0-9a-f]{40}$/.test(value.subject_sha ?? "") &&
     /^[0-9a-f]{40}$/.test(value.bootstrap_sha ?? "") && /^[0-9a-f]{40}$/.test(value.runtime_ref ?? "") &&
+    safeRepository(value.runtime_repository) &&
     typeof value.request_id === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{7,127}$/.test(value.request_id),
   "INVALID_SESSION", "Session file has an invalid identity or SHA contract");
   requireCondition(Array.isArray(value.validation_commands) && value.validation_commands.length > 0,
@@ -342,7 +418,7 @@ function parseArgs(argv) {
   const result = { command: argv[0] };
   requireCondition(["prepare", "validate", "publish"].includes(result.command), "USAGE", "Expected prepare, validate, or publish");
   const allowed = {
-    prepare: new Set(["repository", "issue", "pr", "output", "codegraph_output", "repo", "config"]),
+    prepare: new Set(["repository", "issue", "pr", "branch", "output", "codegraph_output", "repo", "config"]),
     validate: new Set(["session", "result", "repo", "timeout_ms"]),
     publish: new Set(["session", "plan", "review", "validation", "result", "repo", "config"]),
   }[result.command];
@@ -404,7 +480,8 @@ if (isMain) {
     const args = parseArgs(process.argv.slice(2));
     let result;
     if (args.command === "prepare") {
-      requireCondition(args.repository && args.issue && args.pr && args.output, "USAGE", "prepare requires --repository, --issue, --pr, and --output");
+      requireCondition(args.repository && args.issue && (args.pr || args.branch) && !(args.pr && args.branch) && args.output, "USAGE",
+        "prepare requires --repository, --issue, exactly one of --pr or --branch, and --output");
       result = await prepareCloudSession({ ...args, require_pinned_runtime: true, executable: process.argv[1] });
     } else if (args.command === "validate") {
       requireCondition(args.session && args.result, "USAGE", "validate requires --session and --result");

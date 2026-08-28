@@ -19,15 +19,18 @@
   and Deployments write permissions on that repository.
 - Store `AGENT_APP_ID` and the complete `AGENT_APP_PRIVATE_KEY` only in the
   target Codex Cloud environment setup secrets.
-- Configure the identical SHA-pinned installer for Cloud setup and maintenance.
+- Configure the identical compatible SHA-pinned installer for Cloud setup and
+  maintenance; verify that canonical Issue/PR commands self-install their exact
+  intake runtime SHA without rerunning credential setup.
 - Commit protected `.github/prarness.yml` with the exact `owner/repository`,
   validation commands, CI identity/check names, and extra protected paths.
 - Commit the thin hostless intake caller and a secret-free PR validation
   workflow; never use `pull_request_target`.
 - Remove vendored PRarness runtime/policy and legacy rules that prohibit the
   Cloud worker's scoped GitHub writes.
-- Run one Issue canary through bootstrap PR, human `@codex`, Cloud publication,
-  and independent CI reconciliation.
+- Run one Issue canary through the Actions bootstrap branch, human Issue
+  `@codex`, App-created draft PR, Cloud publication, and independent CI
+  reconciliation.
 
 ## Never publish
 

@@ -18,6 +18,11 @@
       "executable": false
     },
     {
+      "path": "cloud-contract.mjs",
+      "sha256": "429605afd0d9f2fadd888a2ce480ce985b10bdc652bbf81ddc2a1ace075ae247",
+      "executable": false
+    },
+    {
       "path": "cloud-github.mjs",
       "sha256": "d40af50fce1cbf762bdb9c42c28e23eb75243d5dddb9881ac84fd57b18b739ee",
       "executable": true
@@ -29,12 +34,12 @@
     },
     {
       "path": "cloud-session.mjs",
-      "sha256": "792120678eea2c1c1a13b5970e53ab84e6f9581f8e781ba1f9758d91e3b9ea60",
+      "sha256": "7a5b33ebc4ad413f5bb8e8e4ac65beb84b62e37940fca1582a34e310487f8368",
       "executable": true
     },
     {
       "path": "prompts/cloud-session.md",
-      "sha256": "4d0314556db497d88f832e2cc3d9a26d7351cfe911864275afd2667688f0c3c7",
+      "sha256": "49be43c9356af86b5e0b56e4798c91cb7a0bd4e5619b447a05eb76531598ca3a",
       "executable": false
     },
     {
