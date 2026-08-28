@@ -29,12 +29,12 @@
     },
     {
       "path": "cloud-session.mjs",
-      "sha256": "8951b4534de7a0eb06f3adb6cc4199fe8144f7db131c2adf517007c060f80486",
+      "sha256": "792120678eea2c1c1a13b5970e53ab84e6f9581f8e781ba1f9758d91e3b9ea60",
       "executable": true
     },
     {
       "path": "prompts/cloud-session.md",
-      "sha256": "b0b93475960aad9c3128c03d95301f6069fe305d8c9524230eb776eb306363fd",
+      "sha256": "4d0314556db497d88f832e2cc3d9a26d7351cfe911864275afd2667688f0c3c7",
       "executable": false
     },
     {

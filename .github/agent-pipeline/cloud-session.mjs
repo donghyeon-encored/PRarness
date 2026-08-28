@@ -356,6 +356,48 @@ function parseArgs(argv) {
   return result;
 }
 
+export function commandReceipt(command, result) {
+  const common = {
+    command,
+    request_id: result.request_id ?? null,
+    pr: result.pr ?? null,
+  };
+  if (command === "prepare") {
+    return {
+      ...common,
+      status: "PREPARED_NOT_PUBLISHED",
+      complete: false,
+      verified: false,
+      instructions: result.instructions_path ?? null,
+      next_action: result.instructions_path
+        ? `Read ${result.instructions_path} completely, then continue this task through prarness-session validate and prarness-session publish.`
+        : "Read the pinned Cloud session instructions, then continue this task through validate and publish.",
+      completion_requirement: "Only a successful prarness-session publish result with verified=true completes PRarness.",
+    };
+  }
+  if (command === "validate") {
+    return {
+      ...common,
+      status: "VALIDATED_NOT_PUBLISHED",
+      complete: false,
+      verified: false,
+      next_action: "Complete self-review and run prarness-session publish in this same task.",
+      completion_requirement: "Validation alone does not assign reviewers, publish review comments, push, or complete PRarness.",
+    };
+  }
+  requireCondition(result.verified === true, "UNVERIFIED_PUBLICATION", "Publish returned without a verified live publication receipt");
+  return {
+    ...common,
+    status: "PUBLICATION_VERIFIED",
+    complete: true,
+    verified: true,
+    pr_url: result.pr_url ?? null,
+    remote_sha: result.remote_sha ?? null,
+    reviewer: result.ownership?.reviewer ?? null,
+    review_phase: result.review?.phase ?? null,
+  };
+}
+
 const isMain = process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url;
 if (isMain) {
   try {
@@ -371,13 +413,7 @@ if (isMain) {
       requireCondition(args.session && args.plan && args.review && args.validation && args.result, "USAGE", "publish requires --session, --plan, --review, --validation, and --result");
       result = await publishCloudSession(args);
     }
-    process.stdout.write(`${stableStringify({
-      command: args.command,
-      verified: true,
-      request_id: result.request_id ?? null,
-      pr: result.pr ?? null,
-      instructions: result.instructions_path ?? null,
-    })}\n`);
+    process.stdout.write(`${stableStringify(commandReceipt(args.command, result))}\n`);
   } catch (error) {
     process.stderr.write(`${stableStringify({ error: error.message, code: error.code ?? "UNEXPECTED_ERROR" })}\n`);
     process.exitCode = 1;

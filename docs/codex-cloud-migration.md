@@ -76,10 +76,13 @@ helper created during setup are what the task uses.
 
 ## Cloud task contract
 
-The bootstrap PR tells the human to post:
+The bootstrap PR renders an exact repository/Issue/PR-bound command. It has
+this shape, with real values already substituted:
 
 ```text
-@codex Execute the PRarness request in this pull request. Run the installed prarness-session command first and complete the linked Issue in one Cloud task.
+@codex Run one complete managed PRarness session for OWNER/REPOSITORY, source Issue #ISSUE, and canonical PR #PR.
+
+Before inspecting or editing code, run prarness-github-setup --verify and the exact prarness-session prepare command printed here. Read the returned instructions path and continue through plan, implementation, self-review, validate, and publish in this same task. Do not use make_pr or create a replacement branch/PR. Completion requires status=PUBLICATION_VERIFIED, complete=true, and verified=true.
 ```
 
 The task must run `prarness-session prepare` before code inspection. That
@@ -92,6 +95,11 @@ analysis/plan/implement/review/validate/publish contract. Publication rebuilds
 the CodeGraph from the actual diff, selects PR assignees and a reviewer,
 recomputes deterministic risk, posts low-risk review comments, and tags the
 selected human for high-risk findings.
+
+`prepare` and `validate` deliberately return `complete=false` and
+`verified=false`; this prevents an intermediate CLI success from being
+mistaken for lifecycle completion. Only `publish` may return the verified
+completion receipt. A regular Codex Summary is not a PRarness receipt.
 
 Publication fails closed when:
 
