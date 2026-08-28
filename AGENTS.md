@@ -15,7 +15,9 @@ directly. The Cloud environment installs the pinned repository-independent
 runtime before the agent phase. First run
 `$HOME/.local/bin/prarness-github-setup --verify OWNER/REPO`, then run
 `$HOME/.local/bin/prarness-session prepare` with the repository, source Issue,
-and bootstrap PR from the task. Follow the returned pinned
+and the exact managed branch from the first Issue task or canonical PR from a
+later task. On the first run, prepare uses the verified repository GitHub App
+to create or reuse the draft PR and check out its branch. Follow the returned pinned
 `prompts/cloud-session.md` contract through validation and publication. Use
 `prarness-github` for separately verified Issue, comment, CI, deployment, and
 reconcile operations instead of asking a person to log in. Keep writes scoped

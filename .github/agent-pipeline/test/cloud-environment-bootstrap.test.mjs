@@ -19,6 +19,7 @@ test("Cloud environment bootstrap verifies and installs the pinned runtime bundl
   const source = join(directory, "source-setup.sh");
   const repositoryCheck = join(directory, "repository-check.mjs");
   const cloudAnalysis = join(directory, "cloud-analysis.mjs");
+  const cloudContract = join(directory, "cloud-contract.mjs");
   const githubOperations = join(directory, "cloud-github.mjs");
   const publisher = join(directory, "cloud-publish.mjs");
   const session = join(directory, "cloud-session.mjs");
@@ -33,6 +34,7 @@ printf '%s' "$*" > "$TEST_INVOCATION"
 `);
   await writeFile(repositoryCheck, "#!/usr/bin/env node\n");
   await writeFile(cloudAnalysis, "export const analysis = true;\n");
+  await writeFile(cloudContract, "export const contract = true;\n");
   await writeFile(githubOperations, "#!/usr/bin/env node\n");
   await writeFile(publisher, "#!/usr/bin/env node\n");
   await writeFile(session, "#!/usr/bin/env node\n");
@@ -42,6 +44,7 @@ printf '%s' "$*" > "$TEST_INVOCATION"
     ["cloud-github-setup.sh", source, true],
     ["repository-check.mjs", repositoryCheck, true],
     ["cloud-analysis.mjs", cloudAnalysis, false],
+    ["cloud-contract.mjs", cloudContract, false],
     ["cloud-github.mjs", githubOperations, true],
     ["cloud-publish.mjs", publisher, true],
     ["cloud-session.mjs", session, true],
@@ -73,6 +76,7 @@ case "$url" in
   */cloud-github-setup.sh) cp "$TEST_SETUP_SOURCE" "$output" ;;
   */repository-check.mjs) cp "$TEST_CHECK_SOURCE" "$output" ;;
   */cloud-analysis.mjs) cp "$TEST_ANALYSIS_SOURCE" "$output" ;;
+  */cloud-contract.mjs) cp "$TEST_CONTRACT_SOURCE" "$output" ;;
   */cloud-github.mjs) cp "$TEST_GITHUB_SOURCE" "$output" ;;
   */cloud-publish.mjs) cp "$TEST_PUBLISH_SOURCE" "$output" ;;
   */cloud-session.mjs) cp "$TEST_SESSION_SOURCE" "$output" ;;
@@ -96,6 +100,7 @@ esac
       TEST_MANIFEST_SOURCE: manifest,
       TEST_CHECK_SOURCE: repositoryCheck,
       TEST_ANALYSIS_SOURCE: cloudAnalysis,
+      TEST_CONTRACT_SOURCE: cloudContract,
       TEST_GITHUB_SOURCE: githubOperations,
       TEST_PUBLISH_SOURCE: publisher,
       TEST_SESSION_SOURCE: session,
@@ -128,7 +133,7 @@ test("committed runtime manifest covers required commands and has exact hashes",
   assert.equal(manifest.version, 1);
   assert.equal(manifest.runtime_contract, 1);
   const entries = new Map(manifest.files.map((entry) => [entry.path, entry]));
-  for (const required of ["cloud-github-setup.sh", "repository-check.mjs", "cloud-analysis.mjs", "cloud-github.mjs", "cloud-publish.mjs", "cloud-session.mjs", "prompts/cloud-session.md", "pipeline.mjs", "team.yaml"]) {
+  for (const required of ["cloud-github-setup.sh", "repository-check.mjs", "cloud-analysis.mjs", "cloud-contract.mjs", "cloud-github.mjs", "cloud-publish.mjs", "cloud-session.mjs", "prompts/cloud-session.md", "pipeline.mjs", "team.yaml"]) {
     assert.equal(entries.has(required), true, `missing runtime entry: ${required}`);
   }
   for (const [relativePath, entry] of entries) {

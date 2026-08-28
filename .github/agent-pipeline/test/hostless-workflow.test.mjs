@@ -20,7 +20,7 @@ test("Issue intake is a thin hostless reusable-workflow caller", async () => {
   assert.match(intake, /persist-credentials: false/g);
   assert.match(intake, /contents: write/);
   assert.match(intake, /issues: write/);
-  assert.match(intake, /pull-requests: write/);
+  assert.doesNotMatch(intake, /pull-requests: write/);
   assert.doesNotMatch(intake, /secrets:|OPENAI_API_KEY|private-key:|pull_request_target/);
 
   assert.match(validation, /\n  pull_request:\n/);
@@ -37,6 +37,7 @@ test("Cloud runtime installs one-session commands and has no relay dependency", 
   const session = await readFile(new URL("../cloud-session.mjs", import.meta.url), "utf8");
   const sessionPrompt = await readFile(new URL("../prompts/cloud-session.md", import.meta.url), "utf8");
   const intakeRuntime = await readFile(new URL("../hostless-intake.mjs", import.meta.url), "utf8");
+  const cloudContract = await readFile(new URL("../cloud-contract.mjs", import.meta.url), "utf8");
   const analysis = await readFile(new URL("../cloud-analysis.mjs", import.meta.url), "utf8");
   const publisher = await readFile(new URL("../cloud-publish.mjs", import.meta.url), "utf8");
 
@@ -55,8 +56,9 @@ test("Cloud runtime installs one-session commands and has no relay dependency", 
   assert.match(session, /PREPARED_NOT_PUBLISHED/);
   assert.match(session, /PUBLICATION_VERIFIED/);
   assert.match(sessionPrompt, /normal Codex Summary/);
-  assert.match(intakeRuntime, /Do not use `make_pr`/);
-  assert.match(intakeRuntime, /--repository \$\{repository\} --issue \$\{issue\} --pr \$\{pr\}/);
+  assert.match(cloudContract, /Do not use `make_pr`/);
+  assert.match(cloudContract, /--repository \$\{repository\} --issue \$\{issue\} --branch \$\{branch\}/);
+  assert.doesNotMatch(intakeRuntime, /request\("POST", client\.repoPath\("\/pulls"\)/);
   assert.match(analysis, /buildCodegraph/);
   assert.match(analysis, /selectOwner/);
   assert.match(analysis, /selectPrTeam/);

@@ -98,14 +98,15 @@ jobs:
     permissions:
       contents: write
       issues: write
-      pull-requests: write
     uses: donghyeon-encored/PRarness/.github/workflows/reusable-intake.yml@REVIEWED_40_CHARACTER_COMMIT_SHA
     with:
       runtime_ref: REVIEWED_40_CHARACTER_COMMIT_SHA
 ```
 
 This workflow has no repository secret. Its scoped `GITHUB_TOKEN` creates only
-the bootstrap branch, draft PR, labels, and canonical intake comment.
+the bootstrap branch, labels, and canonical intake comment. It deliberately
+does not request pull-request write permission: the first Cloud task creates
+the draft PR with the verified repository GitHub App.
 
 ## 3. Secret-free CI
 
@@ -139,16 +140,18 @@ Actions secrets or repository files.
 ## 5. First canary
 
 1. Open a trusted test Issue or apply the configured `agent:run` label.
-2. Confirm Actions creates one draft PR and one canonical Issue comment.
-3. On the draft PR, a connected human copies the documented `@codex` command.
-   The generated command contains the exact repository, Issue, canonical PR,
-   setup verification, prepare arguments, and publication receipt requirement;
-   do not replace it with a shorter generic prompt.
-4. Confirm preparation returns `PREPARED_NOT_PUBLISHED`, assigns one Issue
-   owner, and posts the R&R/CodeGraph
-   problem-progress comment, starts at the bootstrap head, removes the
-   transient request manifest, creates exactly one implementation commit, and
-   pushes it.
+2. Confirm Actions creates one managed branch and one canonical Issue comment,
+   and does not attempt to create a pull request.
+3. On the source Issue, a connected human copies the complete documented
+   `@codex` command. The generated command contains the exact repository,
+   Issue, managed branch, setup verification, prepare arguments, and
+   publication receipt requirement; do not replace it with a shorter generic
+   prompt.
+4. Confirm preparation creates one draft PR with the repository App, checks out
+   the managed branch, returns `PREPARED_NOT_PUBLISHED`, assigns one Issue
+   owner, and posts the R&R/CodeGraph problem-progress comment. The same task
+   then starts at the bootstrap head, removes the transient request manifest,
+   creates exactly one implementation commit, and pushes it.
 5. Accept success only when publish returns `PUBLICATION_VERIFIED` with
    `complete=true` and `verified=true`, and the remote branch SHA, live PR head,
    reviewer assignment, canonical review comments, and all configured checks

@@ -26,8 +26,9 @@
   workflow; never use `pull_request_target`.
 - Remove vendored PRarness runtime/policy and legacy rules that prohibit the
   Cloud worker's scoped GitHub writes.
-- Run one Issue canary through bootstrap PR, human `@codex`, Cloud publication,
-  and independent CI reconciliation.
+- Run one Issue canary through the Actions bootstrap branch, human Issue
+  `@codex`, App-created draft PR, Cloud publication, and independent CI
+  reconciliation.
 
 ## Never publish
 

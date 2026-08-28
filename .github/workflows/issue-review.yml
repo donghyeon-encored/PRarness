@@ -24,7 +24,6 @@ jobs:
     permissions:
       contents: write
       issues: write
-      pull-requests: write
     uses: ./.github/workflows/reusable-intake.yml
     with:
       runtime_ref: ${{ github.sha }}

@@ -16,11 +16,10 @@ on:
 permissions:
   contents: write
   issues: write
-  pull-requests: write
 
 jobs:
   intake:
-    name: Prepare managed draft PR
+    name: Prepare managed Cloud branch
     runs-on: ubuntu-latest
     steps:
       - name: Check out target repository
@@ -67,5 +66,5 @@ jobs:
             echo '- Intake failed before producing a result.' >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          jq -r '"- Operation: `\(.operation)`\n- Issue: #\(.issue // "n/a")\n- Draft PR: \(.pr_url // "not created")\n- Human Cloud dispatch required: \(.requires_human_dispatch // false)"' \
+          jq -r '"- Operation: `\(.operation)`\n- Issue: #\(.issue // "n/a")\n- Managed branch: `\(.branch // "not created")`\n- Draft PR: \(.pr_url // "Cloud prepare will create it")\n- Human Cloud dispatch required: \(.requires_human_dispatch // false)"' \
             "$PRARNESS_RESULT" >> "$GITHUB_STEP_SUMMARY"
