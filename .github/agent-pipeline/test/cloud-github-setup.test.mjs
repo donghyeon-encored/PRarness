@@ -61,16 +61,22 @@ fi
 exit 7
 `);
   await chmod(join(bin, "git"), 0o755); await chmod(join(bin, "gh"), 0o755);
+  const env = { ...process.env };
+  for (const name of [
+    "CODEX_GITHUB_REPOSITORY", "GITHUB_REPOSITORY",
+    "CODEX_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN",
+    "AGENT_APP_ID", "AGENT_APP_PRIVATE_KEY", "AGENT_APP_INSTALLATION_ID",
+  ]) delete env[name];
+  Object.assign(env, {
+    HOME: home,
+    GH_CONFIG_DIR: join(home, ".config", "gh"),
+    PATH: `${bin}:${process.env.PATH}`,
+    CODEX_GITHUB_TOKEN: "github_pat_test_token",
+    TEST_REPOSITORY: repository,
+  });
   return {
     bin, head, home, repo, realGit,
-    env: {
-      ...process.env,
-      HOME: home,
-      GH_CONFIG_DIR: join(home, ".config", "gh"),
-      PATH: `${bin}:${process.env.PATH}`,
-      CODEX_GITHUB_TOKEN: "github_pat_test_token",
-      TEST_REPOSITORY: repository,
-    },
+    env,
   };
 }
 
