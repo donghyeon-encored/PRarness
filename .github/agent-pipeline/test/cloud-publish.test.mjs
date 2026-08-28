@@ -16,6 +16,8 @@ async function fixture() {
   await mkdir(repo); await mkdir(bin);
   const realGit = (await exec("which", ["git"])).stdout.trim();
   await exec(realGit, ["init", "-q", "-b", "main"], { cwd: repo });
+  await exec(realGit, ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-qm", "intake source"], { cwd: repo });
+  const intakeSourceSha = (await exec(realGit, ["rev-parse", "HEAD"], { cwd: repo })).stdout.trim();
   await mkdir(join(repo, ".github")); await mkdir(join(repo, "src"));
   await writeFile(join(repo, ".github/prarness.yml"), `version: 1
 runtime:
@@ -74,6 +76,7 @@ exit 2
     iteration: 1,
     stage: "implement",
     source_sha: sourceSha,
+    intake_source_sha: intakeSourceSha,
     subject_sha: sourceSha,
     branch: "agent/issue-1-fix",
     allowed_paths: ["src/app.js"],
@@ -115,7 +118,7 @@ exit 2
     installation_id: "123",
     permissions: { contents: "write", issues: "write", pull_requests: "write", actions: "write", checks: "write", deployments: "write" },
   }));
-  return { authMetadata, bin, headSha, pushMarker: join(directory, "pushed"), repo, request, sourceSha, validation };
+  return { authMetadata, bin, headSha, intakeSourceSha, pushMarker: join(directory, "pushed"), repo, request, sourceSha, validation };
 }
 
 function json(data, status = 200) {

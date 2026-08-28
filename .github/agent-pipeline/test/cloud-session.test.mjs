@@ -121,7 +121,10 @@ ci:
         api.pull = { ...api.pull, ...options.body };
         return { status: 200, data: api.pull };
       }
-      if (method === "GET" && path === "/repos/owner/repo/pulls/7") return { data: api.pull };
+      if (method === "GET" && path === "/repos/owner/repo/pulls/7") {
+        if (api.trackLocalPullHead) api.pull.head.sha = (await exec("git", ["rev-parse", "HEAD"], { cwd: repo })).stdout.trim();
+        return { data: api.pull };
+      }
       if (method === "GET" && path.endsWith("/assignees/reviewer")) return { status: 204, data: null };
       if (method === "POST" && path.endsWith("/issues/1/assignees")) return { status: 201, data: { assignees: options.body.assignees } };
       if (method === "POST" && path.endsWith("/issues/1/comments")) return { status: 201, data: {
@@ -132,7 +135,7 @@ ci:
       throw new Error(`Unhandled request ${path}`);
     },
   };
-  return { api, bootstrapSha, client, directory, repo, runtimeRef, sourceSha };
+  return { api, bootstrapSha, client, directory, remote, repo, runtimeRef, sourceSha };
 }
 
 test("Cloud session binds the checkout to the canonical intake state", async () => {
@@ -151,6 +154,9 @@ test("Cloud session binds the checkout to the canonical intake state", async () 
       output,
     });
     assert.equal(session.source_sha, context.sourceSha);
+    assert.equal(session.intake_source_sha, context.sourceSha);
+    assert.equal(session.base_ref, "main");
+    assert.equal(session.base_refreshed, false);
     assert.equal(session.subject_sha, context.bootstrapSha);
     assert.equal(session.runtime_ref, context.runtimeRef);
     assert.equal(session.runtime_repository, "donghyeon-encored/PRarness");
@@ -178,6 +184,7 @@ test("Cloud session rejects a checkout that differs from the live PR head", asyn
   const context = await fixture();
   context.client.request = async (_method, path) => {
     if (path.endsWith("/issues/1")) return { data: { number: 1, state: "open" } };
+    if (path === "/repos/owner/repo") return { data: { default_branch: "main" } };
     if (path.endsWith("/pulls/7")) return { data: {
       number: 7,
       state: "open",
@@ -226,6 +233,83 @@ test("Cloud session creates the canonical draft PR and claims the managed branch
     if (priorBotLogin === undefined) delete process.env.AGENT_APP_BOT_LOGIN;
     else process.env.AGENT_APP_BOT_LOGIN = priorBotLogin;
   }
+});
+
+test("Cloud session fast-forwards a managed PR onto an advanced live base before binding the session", async () => {
+  const context = await fixture();
+  await exec("git", ["switch", "-q", "main"], { cwd: context.repo });
+  await writeFile(join(context.repo, "base-change.js"), "export const baseChange = true;\n");
+  await exec("git", ["add", "base-change.js"], { cwd: context.repo });
+  await exec("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "advance base"], { cwd: context.repo });
+  const liveBaseSha = (await exec("git", ["rev-parse", "HEAD"], { cwd: context.repo })).stdout.trim();
+  await exec("git", ["push", "-q", "origin", "main"], { cwd: context.repo });
+  await exec("git", ["switch", "-q", "agent/issue-1-fix"], { cwd: context.repo });
+  context.api.pull.base.sha = liveBaseSha;
+  context.api.trackLocalPullHead = true;
+
+  const session = await prepareCloudSession({
+    repository: "owner/repo",
+    issue: 1,
+    pr: 7,
+    repo: context.repo,
+    client: context.client,
+    skip_preflight: true,
+  });
+
+  assert.equal(session.intake_source_sha, context.sourceSha);
+  assert.equal(session.source_sha, liveBaseSha);
+  assert.equal(session.base_refreshed, true);
+  assert.notEqual(session.subject_sha, context.bootstrapSha);
+  assert.deepEqual(session.existing_changed_paths, []);
+  const parents = (await exec("git", ["rev-list", "--parents", "-n", "1", session.subject_sha], { cwd: context.repo })).stdout.trim().split(" ");
+  assert.deepEqual(new Set(parents.slice(1)), new Set([context.bootstrapSha, liveBaseSha]));
+  assert.equal((await exec("git", ["ls-remote", context.remote, "refs/heads/agent/issue-1-fix"])).stdout.trim().split(/\s/)[0], session.subject_sha);
+});
+
+test("Cloud session refuses a default branch that diverged from the intake source", async () => {
+  const context = await fixture();
+  const tree = (await exec("git", ["rev-parse", "HEAD^{tree}"], { cwd: context.repo })).stdout.trim();
+  const divergent = (await exec("git", [
+    "-c", "user.name=Test",
+    "-c", "user.email=test@example.com",
+    "commit-tree", tree,
+    "-m", "divergent base",
+  ], { cwd: context.repo })).stdout.trim();
+  await exec("git", ["push", "-q", "--force", "origin", `${divergent}:refs/heads/main`], { cwd: context.repo });
+  context.api.pull.base.sha = divergent;
+
+  await assert.rejects(
+    prepareCloudSession({ repository: "owner/repo", issue: 1, pr: 7, repo: context.repo, client: context.client, skip_preflight: true }),
+    (error) => error.code === "DIVERGED_BASE",
+  );
+  assert.equal((await exec("git", ["rev-parse", "HEAD"], { cwd: context.repo })).stdout.trim(), context.bootstrapSha);
+});
+
+test("Cloud session aborts a conflicting base refresh without moving the managed branch", async () => {
+  const context = await fixture();
+  await writeFile(join(context.repo, "app.js"), "export const value = 'branch';\n");
+  await exec("git", ["add", "app.js"], { cwd: context.repo });
+  await exec("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "branch change"], { cwd: context.repo });
+  const branchSha = (await exec("git", ["rev-parse", "HEAD"], { cwd: context.repo })).stdout.trim();
+  await exec("git", ["push", "-q", "origin", "agent/issue-1-fix"], { cwd: context.repo });
+  context.api.pull.head.sha = branchSha;
+
+  await exec("git", ["switch", "-q", "main"], { cwd: context.repo });
+  await writeFile(join(context.repo, "app.js"), "export const value = 'base';\n");
+  await exec("git", ["add", "app.js"], { cwd: context.repo });
+  await exec("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "base conflict"], { cwd: context.repo });
+  const liveBaseSha = (await exec("git", ["rev-parse", "HEAD"], { cwd: context.repo })).stdout.trim();
+  await exec("git", ["push", "-q", "origin", "main"], { cwd: context.repo });
+  await exec("git", ["switch", "-q", "agent/issue-1-fix"], { cwd: context.repo });
+  context.api.pull.base.sha = liveBaseSha;
+
+  await assert.rejects(
+    prepareCloudSession({ repository: "owner/repo", issue: 1, pr: 7, repo: context.repo, client: context.client, skip_preflight: true }),
+    (error) => error.code === "BASE_REFRESH_CONFLICT",
+  );
+  assert.equal((await exec("git", ["rev-parse", "HEAD"], { cwd: context.repo })).stdout.trim(), branchSha);
+  assert.equal((await exec("git", ["status", "--porcelain"], { cwd: context.repo })).stdout, "");
+  assert.equal((await exec("git", ["ls-remote", context.remote, "refs/heads/agent/issue-1-fix"])).stdout.trim().split(/\s/)[0], branchSha);
 });
 
 test("Cloud session CLI cannot bypass capability preflight", async () => {

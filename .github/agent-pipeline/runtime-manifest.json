@@ -29,12 +29,12 @@
     },
     {
       "path": "cloud-publish.mjs",
-      "sha256": "62e5752d3265b264d7fdba49349cd90fcb7e18dfe1faa326306e0163b2bb27cc",
+      "sha256": "bafeaa880c4ff7a03440c7713ace48fc70be34b8c11de3c3c23a2c528d0c2d84",
       "executable": true
     },
     {
       "path": "cloud-session.mjs",
-      "sha256": "ef7acbbc9d9faa0b8492db542871687f86ea4b021b5454dcaead2152ebe770f4",
+      "sha256": "24495b39bea5fc7f3041518aacc00a678adba4a72271953a181d5b49b51704b7",
       "executable": true
     },
     {
