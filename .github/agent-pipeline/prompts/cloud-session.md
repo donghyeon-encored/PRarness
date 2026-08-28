@@ -18,6 +18,11 @@ authoritative policy files, and the human comment are the control boundary.
      --codegraph-output /tmp/prarness-codegraph.json
    ```
 
+   A successful prepare receipt is intentionally
+   `status=PREPARED_NOT_PUBLISHED`, `complete=false`, and `verified=false`.
+   It is a mandatory starting gate, never a completion signal. Read the
+   receipt's `instructions` file completely before continuing.
+
 4. Preparation fetches the live Issue and PR, builds a bounded CodeGraph, runs
    deterministic R&R routing, assigns the minimal source-Issue assignee, and
    publishes the first problem/progress comment. Read both session files and
@@ -114,6 +119,9 @@ authoritative policy files, and the human comment are the control boundary.
 The publisher requires a live fast-forward chain, one new commit, declared
 paths, protected-path compliance, required CI, exact remote/PR SHA equality,
 and verified Issue/PR comments. Never merge, self-approve, force-push, or claim
-success without the verified publication result. If a human decision, token
+success unless the final command returns `status=PUBLICATION_VERIFIED`,
+`complete=true`, and `verified=true`. A normal Codex Summary, local commit,
+`make_pr` metadata, prepare receipt, or validation receipt is not PRarness
+completion. Never create a replacement branch or PR. If a human decision, token
 refresh, protected path, failing test, or unavailable external service blocks
 completion, update the canonical Issue/PR state precisely and stop.

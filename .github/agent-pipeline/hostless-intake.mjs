@@ -233,7 +233,25 @@ async function recoverExistingQueue(client, issue, record) {
   return { state: { ...state, phase: "WAITING_FOR_CODEX" }, pull };
 }
 
-function pullBody(issue, runtimeRef) {
+export function cloudDispatchComment(repository, issue, pr) {
+  requireCondition(safeRepository(repository), "INVALID_REPOSITORY", "repository must use owner/repository format");
+  requireCondition(Number.isInteger(issue) && issue > 0 && Number.isInteger(pr) && pr > 0,
+    "INVALID_SESSION_TARGET", "Cloud dispatch requires positive Issue and PR numbers");
+  return [
+    `@codex Run one complete managed PRarness session for ${repository}, source Issue #${issue}, and canonical PR #${pr}.`,
+    "",
+    "Before inspecting or editing code, run these exact commands:",
+    "",
+    `1. \`$HOME/.local/bin/prarness-github-setup --verify ${repository}\``,
+    `2. \`$HOME/.local/bin/prarness-session prepare --repository ${repository} --issue ${issue} --pr ${pr} --output /tmp/prarness-session.json --codegraph-output /tmp/prarness-codegraph.json\``,
+    "",
+    "Read the `instructions` path printed by prepare completely and follow that pinned contract through plan, implementation, self-review, validate, and publish in this same Cloud task.",
+    "Use the existing managed branch and PR. Do not use `make_pr`, create a replacement branch or PR, or stop after a normal code-change Summary.",
+    "This request is complete only when `prarness-session publish` returns `status=PUBLICATION_VERIFIED`, `complete=true`, and `verified=true` after confirming the live remote/PR SHA, reviewer assignment, managed review comments, and required CI. If publication cannot be verified, report the exact blocker and do not claim completion.",
+  ].join("\n");
+}
+
+function pullBody(issue, runtimeRef, repository, pr) {
   return [
     `Closes #${issue}`,
     "",
@@ -246,13 +264,22 @@ function pullBody(issue, runtimeRef) {
     "이 Draft PR은 GitHub Actions가 만든 작업 대기열입니다. Codex Cloud를 시작하려면 연결된 사람이 이 PR에 다음 댓글을 직접 작성하세요.",
     "",
     "```text",
-    "@codex Execute the PRarness request in this pull request. Run the installed prarness-session command first and complete the linked Issue in one Cloud task.",
+    cloudDispatchComment(repository, issue, pr),
     "```",
     "",
     "Cloud 작업은 임시 request manifest를 최종 변경에서 제거하고, 검증·커밋·push·Issue/PR 상태 갱신을 완료해야 합니다.",
     "",
     "> 자동 merge하지 않습니다.",
   ].join("\n");
+}
+
+async function ensurePullBody(client, pull, issue, runtimeRef) {
+  const body = pullBody(issue, runtimeRef, client.repository, pull.number);
+  if (pull.body === body) return pull;
+  const updated = await client.request("PATCH", client.repoPath(`/pulls/${pull.number}`), { body: { body } });
+  requireCondition(updated.data?.number === pull.number && updated.data?.body === body,
+    "PR_BODY_NOT_CONFIRMED", "GitHub did not confirm the managed Cloud dispatch contract");
+  return updated.data;
 }
 
 async function ensurePullRequest(client, issue, title, branch, base, runtimeRef) {
@@ -262,19 +289,19 @@ async function ensurePullRequest(client, issue, title, branch, base, runtimeRef)
   requireCondition(pulls.length <= 1, "DUPLICATE_MANAGED_PR", "More than one pull request exists for the managed branch");
   if (pulls[0]) {
     requireCondition(pulls[0].state === "open" && pulls[0].merged !== true, "CLOSED_MANAGED_PR", "The canonical managed pull request is closed or merged");
-    return { pull: pulls[0], created: false };
+    return { pull: await ensurePullBody(client, pulls[0], issue, runtimeRef), created: false };
   }
   const created = await client.request("POST", client.repoPath("/pulls"), {
     body: {
       title: `Draft: ${String(title ?? `Issue #${issue}`).slice(0, 180)}`,
-      body: pullBody(issue, runtimeRef),
+      body: `Closes #${issue}\n\nPRarness is finalizing the managed Cloud dispatch contract.`,
       head: branch,
       base,
       draft: true,
     },
   });
   requireCondition(Number.isInteger(created.data?.number) && created.data?.html_url, "PR_NOT_CONFIRMED", "GitHub did not confirm the bootstrap pull request");
-  return { pull: created.data, created: true };
+  return { pull: await ensurePullBody(client, created.data, issue, runtimeRef), created: true };
 }
 
 export async function executeHostlessIntake(options = {}) {
@@ -310,6 +337,9 @@ export async function executeHostlessIntake(options = {}) {
   const existingRecord = await findIntakeState(client, decision.issue);
   const existingQueue = await recoverExistingQueue(client, decision.issue, existingRecord);
   if (existingQueue) {
+    requireCondition(existingQueue.state.runtime_ref === runtimeRef, "STALE_RUNTIME_REF",
+      `Existing managed queue is pinned to ${existingQueue.state.runtime_ref}; migrate or close it explicitly before running ${runtimeRef}`);
+    existingQueue.pull = await ensurePullBody(client, existingQueue.pull, decision.issue, runtimeRef);
     await removeLabel(client, decision.issue, "agent:approval-required");
     await addLabel(client, decision.issue, "agent:waiting-for-codex");
     const comment = await upsertIntakeComment(client, decision.issue, [

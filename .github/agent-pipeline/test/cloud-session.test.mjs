@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { prepareCloudSession, validateCloudSession } from "../cloud-session.mjs";
+import { commandReceipt, prepareCloudSession, validateCloudSession } from "../cloud-session.mjs";
 
 const exec = promisify(execFile);
 const sessionCli = fileURLToPath(new URL("../cloud-session.mjs", import.meta.url));
@@ -164,4 +164,38 @@ test("Cloud session CLI cannot bypass capability preflight", async () => {
     exec(process.execPath, [sessionCli, "prepare", "--skip-preflight", "true"]),
     (error) => /Unsupported prepare option/.test(error.stderr),
   );
+});
+
+test("only publish can return a verified completion receipt", () => {
+  const prepared = commandReceipt("prepare", {
+    request_id: "prarness-issue-1-iteration-1",
+    instructions_path: "/runtime/prompts/cloud-session.md",
+  });
+  assert.equal(prepared.status, "PREPARED_NOT_PUBLISHED");
+  assert.equal(prepared.complete, false);
+  assert.equal(prepared.verified, false);
+  assert.match(prepared.next_action, /prarness-session publish/);
+
+  const validated = commandReceipt("validate", { request_id: "prarness-issue-1-iteration-1" });
+  assert.equal(validated.status, "VALIDATED_NOT_PUBLISHED");
+  assert.equal(validated.complete, false);
+  assert.equal(validated.verified, false);
+
+  assert.throws(
+    () => commandReceipt("publish", { request_id: "prarness-issue-1-iteration-1", verified: false }),
+    (error) => error.code === "UNVERIFIED_PUBLICATION",
+  );
+  const published = commandReceipt("publish", {
+    request_id: "prarness-issue-1-iteration-1",
+    verified: true,
+    pr: 7,
+    pr_url: "https://github.com/owner/repo/pull/7",
+    remote_sha: "a".repeat(40),
+    ownership: { reviewer: "reviewer" },
+    review: { phase: "review" },
+  });
+  assert.equal(published.status, "PUBLICATION_VERIFIED");
+  assert.equal(published.complete, true);
+  assert.equal(published.verified, true);
+  assert.equal(published.reviewer, "reviewer");
 });

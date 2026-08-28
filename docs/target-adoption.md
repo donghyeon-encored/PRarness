@@ -141,12 +141,18 @@ Actions secrets or repository files.
 1. Open a trusted test Issue or apply the configured `agent:run` label.
 2. Confirm Actions creates one draft PR and one canonical Issue comment.
 3. On the draft PR, a connected human copies the documented `@codex` command.
-4. Confirm preparation assigns one Issue owner, posts the R&R/CodeGraph
+   The generated command contains the exact repository, Issue, canonical PR,
+   setup verification, prepare arguments, and publication receipt requirement;
+   do not replace it with a shorter generic prompt.
+4. Confirm preparation returns `PREPARED_NOT_PUBLISHED`, assigns one Issue
+   owner, and posts the R&R/CodeGraph
    problem-progress comment, starts at the bootstrap head, removes the
    transient request manifest, creates exactly one implementation commit, and
    pushes it.
-5. Accept success only when the remote branch SHA, live PR head, canonical
-   comments, and all configured checks agree.
+5. Accept success only when publish returns `PUBLICATION_VERIFIED` with
+   `complete=true` and `verified=true`, and the remote branch SHA, live PR head,
+   reviewer assignment, canonical review comments, and all configured checks
+   agree.
 
 After the canary, remove copied `.github/agent-pipeline/**`, copied prompts,
 schemas, tests, and central policy from the target. The thin adapter files above

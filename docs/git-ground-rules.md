@@ -64,8 +64,10 @@ untrusted code while setup secrets are available.
   `.prarness/requests/issue-{number}.json` request manifest. The Cloud
   implementation commit removes it so it never appears in the final base-to-PR
   diff.
-- The draft PR contains a copyable human `@codex` command. Actions must not post
-  that mention and claim that Cloud started.
+- The draft PR contains a copyable human `@codex` command bound to the exact
+  repository, source Issue, canonical PR, setup verification, prepare command,
+  and verified publication receipt. Actions must not post that mention and
+  claim that Cloud started.
 
 ## Scope, branches, and commits
 
@@ -153,3 +155,7 @@ human review. These operations are part of the same Cloud task.
 Human review is required before merge. A Cloud task reporting `verified: true`
 means only that its scoped publication and configured CI evidence were
 reconciled against GitHub.
+Prepare and validation receipts always report `complete: false` and
+`verified: false`; only a `PUBLICATION_VERIFIED` publish receipt may report
+completion. A normal Codex Summary or `make_pr` metadata is never completion
+evidence.
