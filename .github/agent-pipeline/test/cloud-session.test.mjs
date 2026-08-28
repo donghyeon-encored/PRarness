@@ -103,6 +103,9 @@ ci:
         user: { login: "reporter" },
       } };
       if (method === "GET" && path === "/repos/owner/repo") return { data: { default_branch: "main" } };
+      if (method === "GET" && path === "/repos/owner/repo/commits/main") return { data: {
+        sha: (await exec("git", ["--git-dir", remote, "rev-parse", "refs/heads/main"])).stdout.trim(),
+      } };
       if (method === "GET" && path.startsWith("/repos/owner/repo/pulls?")) return { data: api.pull ? [api.pull] : [] };
       if (method === "POST" && path === "/repos/owner/repo/pulls") {
         api.pull = {
@@ -244,7 +247,6 @@ test("Cloud session fast-forwards a managed PR onto an advanced live base before
   const liveBaseSha = (await exec("git", ["rev-parse", "HEAD"], { cwd: context.repo })).stdout.trim();
   await exec("git", ["push", "-q", "origin", "main"], { cwd: context.repo });
   await exec("git", ["switch", "-q", "agent/issue-1-fix"], { cwd: context.repo });
-  context.api.pull.base.sha = liveBaseSha;
   context.api.trackLocalPullHead = true;
 
   const session = await prepareCloudSession({
@@ -259,6 +261,7 @@ test("Cloud session fast-forwards a managed PR onto an advanced live base before
   assert.equal(session.intake_source_sha, context.sourceSha);
   assert.equal(session.source_sha, liveBaseSha);
   assert.equal(session.base_refreshed, true);
+  assert.equal(context.api.pull.base.sha, context.sourceSha);
   assert.notEqual(session.subject_sha, context.bootstrapSha);
   assert.deepEqual(session.existing_changed_paths, []);
   const parents = (await exec("git", ["rev-list", "--parents", "-n", "1", session.subject_sha], { cwd: context.repo })).stdout.trim().split(" ");
@@ -276,7 +279,6 @@ test("Cloud session refuses a default branch that diverged from the intake sourc
     "-m", "divergent base",
   ], { cwd: context.repo })).stdout.trim();
   await exec("git", ["push", "-q", "--force", "origin", `${divergent}:refs/heads/main`], { cwd: context.repo });
-  context.api.pull.base.sha = divergent;
 
   await assert.rejects(
     prepareCloudSession({ repository: "owner/repo", issue: 1, pr: 7, repo: context.repo, client: context.client, skip_preflight: true }),
@@ -301,7 +303,6 @@ test("Cloud session aborts a conflicting base refresh without moving the managed
   const liveBaseSha = (await exec("git", ["rev-parse", "HEAD"], { cwd: context.repo })).stdout.trim();
   await exec("git", ["push", "-q", "origin", "main"], { cwd: context.repo });
   await exec("git", ["switch", "-q", "agent/issue-1-fix"], { cwd: context.repo });
-  context.api.pull.base.sha = liveBaseSha;
 
   await assert.rejects(
     prepareCloudSession({ repository: "owner/repo", issue: 1, pr: 7, repo: context.repo, client: context.client, skip_preflight: true }),

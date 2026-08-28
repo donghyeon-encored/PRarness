@@ -152,10 +152,19 @@ function remoteBranchSha(repo, branch) {
   return match[1];
 }
 
-async function confirmPullRefresh(client, pullNumber, headSha, baseSha) {
+async function liveDefaultBranchSha(client, defaultBranch) {
+  const commit = (await client.request("GET", client.repoPath(`/commits/${encodeURIComponent(defaultBranch)}`))).data;
+  const sha = String(commit?.sha ?? "");
+  requireCondition(/^[0-9a-f]{40}$/.test(sha), "INVALID_DEFAULT_BRANCH_SHA",
+    "GitHub did not return a full commit SHA for the default branch");
+  return sha;
+}
+
+async function confirmPullRefresh(client, pullNumber, headSha, defaultBranch, baseSha) {
   for (let attempt = 1; attempt <= 5; attempt += 1) {
     const pull = (await client.request("GET", client.repoPath(`/pulls/${pullNumber}`))).data;
-    if (pull?.head?.sha === headSha && pull?.base?.sha === baseSha) return pull;
+    const liveBaseSha = await liveDefaultBranchSha(client, defaultBranch);
+    if (pull?.head?.sha === headSha && pull?.base?.ref === defaultBranch && liveBaseSha === baseSha) return pull;
     if (attempt < 5) await new Promise((resolvePromise) => setTimeout(resolvePromise, attempt * 200));
   }
   throw new CloudSessionError("BASE_REFRESH_NOT_CONFIRMED", "Canonical pull request did not confirm the refreshed branch and live base");
@@ -164,12 +173,12 @@ async function confirmPullRefresh(client, pullNumber, headSha, baseSha) {
 async function refreshManagedBase(client, options) {
   const { repo, pull, branch, defaultBranch, intakeSourceSha } = options;
   const expectedHead = String(pull?.head?.sha ?? "");
-  const liveBaseSha = String(pull?.base?.sha ?? "");
-  requireCondition(/^[0-9a-f]{40}$/.test(expectedHead) && /^[0-9a-f]{40}$/.test(liveBaseSha),
-    "INVALID_PR_SHA", "Canonical pull request is missing a full head or base SHA");
+  requireCondition(/^[0-9a-f]{40}$/.test(expectedHead), "INVALID_PR_SHA",
+    "Canonical pull request is missing a full head SHA");
   git(repo, ["fetch", "--no-tags", "origin", `refs/heads/${defaultBranch}:refs/remotes/origin/${defaultBranch}`]);
-  const fetchedBase = git(repo, ["rev-parse", `refs/remotes/origin/${defaultBranch}`]);
-  requireCondition(fetchedBase === liveBaseSha, "STALE_BASE", "Default branch moved while the Cloud session was being prepared");
+  const liveBaseSha = git(repo, ["rev-parse", `refs/remotes/origin/${defaultBranch}`]);
+  requireCondition(await liveDefaultBranchSha(client, defaultBranch) === liveBaseSha, "STALE_BASE",
+    "Default branch moved while the Cloud session was being prepared");
   requireCondition(isAncestor(repo, intakeSourceSha, liveBaseSha), "DIVERGED_BASE",
     "Current default branch is not a fast-forward descendant of the intake source SHA");
   const currentHead = git(repo, ["rev-parse", "HEAD"]);
@@ -199,7 +208,7 @@ async function refreshManagedBase(client, options) {
   git(repo, ["push", "origin", `HEAD:refs/heads/${branch}`]);
   requireCondition(remoteBranchSha(repo, branch) === refreshedHead, "BASE_REFRESH_NOT_CONFIRMED",
     "Managed branch base refresh was not confirmed on origin");
-  const updatedPull = await confirmPullRefresh(client, pull.number, refreshedHead, liveBaseSha);
+  const updatedPull = await confirmPullRefresh(client, pull.number, refreshedHead, defaultBranch, liveBaseSha);
   return { pull: updatedPull, source_sha: liveBaseSha, subject_sha: refreshedHead, refreshed: true };
 }
 

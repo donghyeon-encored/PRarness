@@ -2169,11 +2169,14 @@ export async function validateLivePublication(client, input = {}) {
     invariant(String(pull.base?.ref ?? "") === defaultBranch, "PR base is not the current default branch", "UNSAFE_PR_BASE");
     invariant(!branch || String(pull.head?.ref ?? "") === branch, "PR head branch changed", "UNSAFE_PR_HEAD");
     invariant(!expectedHead || String(pull.head?.sha ?? "") === expectedHead, "PR head SHA changed", "STALE_HEAD");
-    invariant(!expectedBase || String(pull.base?.sha ?? "") === expectedBase, "PR base SHA changed", "STALE_BASE");
   } else {
     invariant(!prNumber, "Canonical PR no longer exists", "UNSAFE_PR_LIFECYCLE");
+  }
+  let liveBaseSha = "";
+  if (expectedBase) {
     const commit = await client.request("GET", client.repoPath(`/commits/${encodeURIComponent(defaultBranch)}`));
-    invariant(!expectedBase || String(commit.data?.sha ?? "") === expectedBase, "Default branch changed after verification", "STALE_BASE");
+    liveBaseSha = String(commit.data?.sha ?? "");
+    invariant(liveBaseSha === expectedBase, "Default branch changed after verification", "STALE_BASE");
   }
 
   return {
@@ -2185,6 +2188,7 @@ export async function validateLivePublication(client, input = {}) {
     pull,
     expected_head_sha: expectedHead || null,
     expected_base_sha: expectedBase || null,
+    live_base_sha: liveBaseSha || null,
   };
 }
 
