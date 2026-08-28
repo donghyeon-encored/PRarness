@@ -119,6 +119,30 @@ esac
   assert.equal((await stat(join(home, ".local/bin/prarness-github"))).mode & 0o777, 0o700);
   assert.equal((await stat(join(home, ".local/bin/prarness-publish"))).mode & 0o777, 0o700);
   assert.equal((await stat(join(home, ".local/bin/prarness-session"))).mode & 0o777, 0o700);
+
+  await writeFile(invocation, "not-called");
+  await exec("bash", [installer, "owner/repo"], {
+    env: {
+      ...process.env,
+      HOME: home,
+      PATH: `${bin}:${process.env.PATH}`,
+      PRARNESS_BOOTSTRAP_REF: ref,
+      PRARNESS_BOOTSTRAP_SKIP_GITHUB_SETUP: "true",
+      TEST_INVOCATION: invocation,
+      TEST_REQUESTED_URL: requestedUrl,
+      TEST_SETUP_SOURCE: source,
+      TEST_MANIFEST_SOURCE: manifest,
+      TEST_CHECK_SOURCE: repositoryCheck,
+      TEST_ANALYSIS_SOURCE: cloudAnalysis,
+      TEST_CONTRACT_SOURCE: cloudContract,
+      TEST_GITHUB_SOURCE: githubOperations,
+      TEST_PUBLISH_SOURCE: publisher,
+      TEST_SESSION_SOURCE: session,
+      TEST_SESSION_PROMPT_SOURCE: sessionPrompt,
+      TEST_TEAM_SOURCE: teamPolicy,
+    },
+  });
+  assert.equal(await readFile(invocation, "utf8"), "not-called");
 });
 
 test("Cloud environment bootstrap rejects mutable or abbreviated refs", async () => {

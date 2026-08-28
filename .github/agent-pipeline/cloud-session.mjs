@@ -13,6 +13,7 @@ import { normalizeAgentOutput, publish, stableStringify } from "./pipeline.mjs";
 import { checkRepositoryCompatibility } from "./repository-check.mjs";
 
 const STATE_PATTERN = /<!-- prarness-intake-state:v2 (\{[^\n]*\}) -->/;
+const DEFAULT_RUNTIME_REPOSITORY = "donghyeon-encored/PRarness";
 
 export class CloudSessionError extends Error {
   constructor(code, message) {
@@ -92,7 +93,7 @@ function verifyPinnedRuntime(runtimeRef, executable) {
   requireCondition(actual.includes(`/prarness/${runtimeRef}/`), "RUNTIME_REF_MISMATCH", "prarness-session is not running from the runtime SHA recorded by intake");
 }
 
-async function ensureCloudPullRequest(client, { repository, issue, title, branch, base, runtimeRef }) {
+async function ensureCloudPullRequest(client, { repository, issue, title, branch, base, runtimeRef, runtimeRepository }) {
   const owner = repository.split("/")[0];
   const response = await client.request("GET", client.repoPath(`/pulls?state=all&head=${encodeURIComponent(`${owner}:${branch}`)}&base=${encodeURIComponent(base)}&per_page=100`));
   const pulls = Array.isArray(response.data) ? response.data : [];
@@ -115,7 +116,7 @@ async function ensureCloudPullRequest(client, { repository, issue, title, branch
       "The repository GitHub App did not confirm the bootstrap pull request");
     pull = created.data;
   }
-  const body = managedPullBody(repository, issue, pull.number, runtimeRef);
+  const body = managedPullBody(repository, issue, pull.number, runtimeRef, runtimeRepository);
   if (pull.body !== body) {
     const updated = await client.request("PATCH", client.repoPath(`/pulls/${pull.number}`), { body: { body } });
     requireCondition(updated.data?.number === pull.number && updated.data?.body === body, "PR_BODY_NOT_CONFIRMED",
@@ -160,6 +161,8 @@ export async function prepareCloudSession(options = {}) {
   requireCondition(typeof state.branch === "string" && safeBranch(state.branch, issueNumber), "INVALID_INTAKE_STATE", "Canonical intake state has no managed branch");
   requireCondition(/^[0-9a-f]{40}$/.test(state.source_sha ?? "") && /^[0-9a-f]{40}$/.test(state.bootstrap_sha ?? "") && /^[0-9a-f]{40}$/.test(state.runtime_ref ?? ""),
     "INVALID_INTAKE_STATE", "Canonical intake state is missing source, bootstrap, or runtime SHA");
+  const runtimeRepository = String(state.runtime_repository ?? DEFAULT_RUNTIME_REPOSITORY);
+  requireCondition(safeRepository(runtimeRepository), "INVALID_INTAKE_STATE", "Canonical intake state has an invalid runtime repository");
   let pull;
   if (requestedPr !== null) {
     pull = (await client.request("GET", client.repoPath(`/pulls/${requestedPr}`))).data;
@@ -175,6 +178,7 @@ export async function prepareCloudSession(options = {}) {
       branch: state.branch,
       base,
       runtimeRef: state.runtime_ref,
+      runtimeRepository,
     });
   }
   const prNumber = Number(pull?.number);
@@ -188,7 +192,8 @@ export async function prepareCloudSession(options = {}) {
   const manifest = readOptionalManifest(repo, issueNumber);
   if (manifest) {
     requireCondition(manifest.version === 2 && manifest.repository === repository && manifest.issue === issueNumber && manifest.branch === branch &&
-      manifest.source_sha === state.source_sha && manifest.runtime_ref === state.runtime_ref,
+      manifest.source_sha === state.source_sha && manifest.runtime_ref === state.runtime_ref &&
+      String(manifest.runtime_repository ?? DEFAULT_RUNTIME_REPOSITORY) === runtimeRepository,
     "REQUEST_MANIFEST_MISMATCH", "Tracked request manifest does not match canonical intake state");
   }
   const head = git(repo, ["rev-parse", "HEAD"]);
@@ -253,6 +258,7 @@ export async function prepareCloudSession(options = {}) {
     subject_sha: head,
     bootstrap_sha: state.bootstrap_sha,
     runtime_ref: state.runtime_ref,
+    runtime_repository: runtimeRepository,
     instructions_path: instructionsPath,
     iteration: commitsAfterBase,
     request_manifest: requestManifest,
@@ -296,6 +302,7 @@ function readSession(path) {
     Number.isInteger(value.iteration) && value.iteration > 0 &&
     /^[0-9a-f]{40}$/.test(value.source_sha ?? "") && /^[0-9a-f]{40}$/.test(value.subject_sha ?? "") &&
     /^[0-9a-f]{40}$/.test(value.bootstrap_sha ?? "") && /^[0-9a-f]{40}$/.test(value.runtime_ref ?? "") &&
+    safeRepository(value.runtime_repository) &&
     typeof value.request_id === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{7,127}$/.test(value.request_id),
   "INVALID_SESSION", "Session file has an invalid identity or SHA contract");
   requireCondition(Array.isArray(value.validation_commands) && value.validation_commands.length > 0,

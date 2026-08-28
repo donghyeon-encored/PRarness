@@ -50,6 +50,7 @@ jobs:
           node .prarness-runtime/.github/agent-pipeline/hostless-intake.mjs
           --repository "$GITHUB_REPOSITORY"
           --runtime-ref "${{ inputs.runtime_ref }}"
+          --runtime-repository "${{ inputs.runtime_repository }}"
           --event "$GITHUB_EVENT_PATH"
           --event-name "$GITHUB_EVENT_NAME"
           --repo "$GITHUB_WORKSPACE"

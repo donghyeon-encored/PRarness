@@ -19,7 +19,7 @@
     },
     {
       "path": "cloud-contract.mjs",
-      "sha256": "9b5a30ad01416d3191150c6904763c6dad3c2afcd790a0d1a8605093c5177f98",
+      "sha256": "429605afd0d9f2fadd888a2ce480ce985b10bdc652bbf81ddc2a1ace075ae247",
       "executable": false
     },
     {
@@ -34,12 +34,12 @@
     },
     {
       "path": "cloud-session.mjs",
-      "sha256": "a690379a46c1c72b2dc3ea46b74a05f4a48a8601377423e3a1fb3953eb4dc19a",
+      "sha256": "7a5b33ebc4ad413f5bb8e8e4ac65beb84b62e37940fca1582a34e310487f8368",
       "executable": true
     },
     {
       "path": "prompts/cloud-session.md",
-      "sha256": "a99f29d734ba0e3a442275da74fb760d492038db0f2ee497c4baef322859b82a",
+      "sha256": "49be43c9356af86b5e0b56e4798c91cb7a0bd4e5619b447a05eb76531598ca3a",
       "executable": false
     },
     {

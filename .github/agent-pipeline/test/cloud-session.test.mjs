@@ -58,6 +58,7 @@ ci:
     branch: "agent/issue-1-fix",
     source_sha: sourceSha,
     runtime_ref: runtimeRef,
+    runtime_repository: "donghyeon-encored/PRarness",
     dispatch: "human_pr_mention",
   };
   await writeFile(join(repo, ".prarness/requests/issue-1.json"), `${JSON.stringify(manifest)}\n`);
@@ -68,7 +69,7 @@ ci:
   await exec("git", ["init", "-q", "--bare", remote], { cwd: directory });
   await exec("git", ["remote", "add", "origin", remote], { cwd: repo });
   await exec("git", ["push", "-q", "origin", "main", "agent/issue-1-fix"], { cwd: repo });
-  const intakeState = { version: 2, issue: 1, phase: "WAITING_FOR_CODEX", branch: "agent/issue-1-fix", pr: 7, base: "main", source_sha: sourceSha, bootstrap_sha: bootstrapSha, runtime_ref: runtimeRef };
+  const intakeState = { version: 2, issue: 1, phase: "WAITING_FOR_CODEX", branch: "agent/issue-1-fix", pr: 7, base: "main", source_sha: sourceSha, bootstrap_sha: bootstrapSha, runtime_ref: runtimeRef, runtime_repository: "donghyeon-encored/PRarness" };
   const api = {
     calls: [],
     intakeState,
@@ -152,6 +153,7 @@ test("Cloud session binds the checkout to the canonical intake state", async () 
     assert.equal(session.source_sha, context.sourceSha);
     assert.equal(session.subject_sha, context.bootstrapSha);
     assert.equal(session.runtime_ref, context.runtimeRef);
+    assert.equal(session.runtime_repository, "donghyeon-encored/PRarness");
     assert.equal(session.iteration, 1);
     assert.equal(session.request_manifest, ".prarness/requests/issue-1.json");
     assert.deepEqual(session.existing_changed_paths, []);
@@ -216,6 +218,8 @@ test("Cloud session creates the canonical draft PR and claims the managed branch
     assert.equal(create.body.draft, true);
     assert.equal(create.body.head, "agent/issue-1-fix");
     const update = context.api.calls.find((call) => call.method === "PATCH" && call.path === "/repos/owner/repo/pulls/7");
+    assert.match(update.body.body, new RegExp(`PRARNESS_BOOTSTRAP_REF=${context.runtimeRef}`));
+    assert.match(update.body.body, /PRARNESS_BOOTSTRAP_SKIP_GITHUB_SETUP=true/);
     assert.match(update.body.body, /--repository owner\/repo --issue 1 --pr 7/);
     assert.match(update.body.body, /Do not use `make_pr`/);
   } finally {

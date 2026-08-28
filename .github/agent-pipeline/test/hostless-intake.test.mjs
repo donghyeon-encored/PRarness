@@ -167,6 +167,7 @@ test("intake safely migrates a branch-only queue to a new pinned runtime", async
   assert.equal(migrated.operation, "bootstrap_branch");
   assert.equal(migrated.bootstrap_sha, migrationSha);
   assert.equal(migrated.state.runtime_ref, migratedRuntimeRef);
+  assert.equal(migrated.state.runtime_repository, "donghyeon-encored/PRarness");
   assert.equal(state.recoveryManifest.runtime_ref, migratedRuntimeRef);
 });
 
@@ -193,15 +194,22 @@ test("intake recovers the Cloud-created draft PR after the managed branch moves"
   assert.equal(state.calls.some((call) => call.method === "POST" && call.path.endsWith("/pulls")), false);
 });
 
-test("Cloud dispatch comment binds exact identifiers and verified publication", () => {
-  const comment = cloudIssueDispatchComment("owner/repo", 12, "agent/issue-12-fix");
+test("Cloud dispatch comment self-installs the exact runtime and binds verified publication", () => {
+  const comment = cloudIssueDispatchComment("owner/repo", 12, "agent/issue-12-fix", runtimeRef);
   assert.match(comment, /^@codex Run one complete managed PRarness session/);
+  assert.match(comment, new RegExp(`raw\\.githubusercontent\\.com/donghyeon-encored/PRarness/${runtimeRef}/`));
+  assert.match(comment, new RegExp(`PRARNESS_BOOTSTRAP_REF=${runtimeRef}`));
+  assert.match(comment, /PRARNESS_BOOTSTRAP_SKIP_GITHUB_SETUP=true/);
   assert.match(comment, /prarness-github-setup --verify owner\/repo/);
   assert.match(comment, /prarness-session prepare --repository owner\/repo --issue 12 --branch agent\/issue-12-fix/);
   assert.match(comment, /Read the `instructions` path/);
   assert.match(comment, /prarness-session publish/);
   assert.match(comment, /complete=true/);
-  assert.throws(() => cloudIssueDispatchComment("unsafe", 12, "agent/issue-12-fix"), TypeError);
+  assert.match(
+    cloudIssueDispatchComment("owner/repo", 12, "agent/issue-12-fix", runtimeRef, "upstream/custom-runtime"),
+    new RegExp(`raw\\.githubusercontent\\.com/upstream/custom-runtime/${runtimeRef}/`),
+  );
+  assert.throws(() => cloudIssueDispatchComment("unsafe", 12, "agent/issue-12-fix", runtimeRef), TypeError);
 });
 
 test("untrusted Issue intake stops at explicit maintainer approval", async () => {

@@ -16,6 +16,7 @@ test("Issue intake is a thin hostless reusable-workflow caller", async () => {
 
   assert.match(intake, /workflow_call:/);
   assert.match(intake, /runtime_ref:/);
+  assert.match(intake, /--runtime-repository "\$\{\{ inputs\.runtime_repository \}\}"/);
   assert.match(intake, /hostless-intake\.mjs/);
   assert.match(intake, /persist-credentials: false/g);
   assert.match(intake, /contents: write/);

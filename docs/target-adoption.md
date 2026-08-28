@@ -135,7 +135,10 @@ check names.
 Create/select the Codex Cloud environment connected to the target repository.
 Use the runbook in `codex-cloud-migration.md` for both setup and maintenance.
 Store the GitHub App ID and private key there once. Do not add them to GitHub
-Actions secrets or repository files.
+Actions secrets or repository files. The environment bootstrap SHA may remain
+on a reviewed compatible release: each canonical Issue/PR command self-installs
+the exact runtime SHA recorded by intake, so routine adapter pin updates do not
+require another environment UI edit.
 
 ## 5. First canary
 
@@ -144,9 +147,9 @@ Actions secrets or repository files.
    and does not attempt to create a pull request.
 3. On the source Issue, a connected human copies the complete documented
    `@codex` command. The generated command contains the exact repository,
-   Issue, managed branch, setup verification, prepare arguments, and
-   publication receipt requirement; do not replace it with a shorter generic
-   prompt.
+   Issue, managed branch, intake runtime installer, setup verification, prepare
+   arguments, and publication receipt requirement; do not replace it with a
+   shorter generic prompt.
 4. Confirm preparation creates one draft PR with the repository App, checks out
    the managed branch, returns `PREPARED_NOT_PUBLISHED`, assigns one Issue
    owner, and posts the R&R/CodeGraph problem-progress comment. The same task

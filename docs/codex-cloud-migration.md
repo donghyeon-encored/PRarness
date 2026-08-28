@@ -35,14 +35,16 @@ these values in a repository, GitHub Actions variable, job output, or log.
 
 ## Setup and maintenance script
 
-Use the same script in both Cloud setup and maintenance, replacing the SHA only
-after the reviewed PRarness commit is published:
+Use the same compatible bootstrap SHA in both Cloud setup and maintenance. It
+mints a fresh repository App token before every task. Routine runtime releases
+do not require editing this environment script because each canonical human
+command self-installs its exact intake runtime SHA during the agent phase:
 
 ```bash
 set -euo pipefail
 set +x
 
-prarness_ref=REVIEWED_40_CHARACTER_COMMIT_SHA
+prarness_ref=COMPATIBLE_REVIEWED_40_CHARACTER_BOOTSTRAP_SHA
 installer_path=/tmp/prarness-cloud-environment-bootstrap.sh
 
 curl --fail --silent --show-error --location \
@@ -52,8 +54,8 @@ curl --fail --silent --show-error --location \
 PRARNESS_BOOTSTRAP_REF="$prarness_ref" bash "$installer_path"
 ```
 
-The installer downloads `runtime-manifest.json`, verifies every SHA-256, and
-installs the runtime under:
+The environment installer downloads `runtime-manifest.json`, verifies every
+SHA-256, installs the compatible runtime, and configures GitHub under:
 
 ```text
 $HOME/.local/share/prarness/<commit-sha>/
@@ -75,6 +77,13 @@ verifies a fresh token before the agent starts. Secrets are unavailable during
 the later agent phase by design; the repository-scoped token and credential
 helper created during setup are what the task uses.
 
+The canonical Issue/PR command downloads the immutable intake runtime's
+installer and runs it with
+`PRARNESS_BOOTSTRAP_SKIP_GITHUB_SETUP=true`. This verifies and switches the
+runtime without downgrading, replacing, or exposing the credential created by
+setup/maintenance. It then runs `prarness-github-setup --verify` before
+preparation.
+
 ## Cloud task contract
 
 The canonical intake Issue comment renders an exact
@@ -84,7 +93,7 @@ already substituted:
 ```text
 @codex Run one complete managed PRarness session for OWNER/REPOSITORY, source Issue #ISSUE, and managed branch BRANCH.
 
-Before inspecting or editing code, run prarness-github-setup --verify and the exact branch-bound prarness-session prepare command printed here. Prepare creates or reuses the canonical draft PR with the verified repository App. Read the returned instructions path and continue through plan, implementation, self-review, validate, and publish in this same task. Do not use make_pr or create a replacement branch/PR. Completion requires status=PUBLICATION_VERIFIED, complete=true, and verified=true.
+Before inspecting or editing code, run the exact intake-SHA bootstrap, prarness-github-setup --verify, and branch-bound prarness-session prepare commands printed here. Prepare creates or reuses the canonical draft PR with the verified repository App. Read the returned instructions path and continue through plan, implementation, self-review, validate, and publish in this same task. Do not use make_pr or create a replacement branch/PR. Completion requires status=PUBLICATION_VERIFIED, complete=true, and verified=true.
 ```
 
 The task must run `prarness-session prepare` before code inspection. The first

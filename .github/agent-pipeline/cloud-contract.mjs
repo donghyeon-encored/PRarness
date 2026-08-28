@@ -14,6 +14,22 @@ function validBranch(value, issue) {
   return typeof value === "string" && value.startsWith(`agent/issue-${issue}-`) && /^[A-Za-z0-9._/-]+$/.test(value);
 }
 
+function validRuntimeRef(value) {
+  return typeof value === "string" && /^[0-9a-f]{40}$/.test(value);
+}
+
+function runtimeBootstrapCommands(runtimeRepository, runtimeRef, repository) {
+  requireValue(validRepository(runtimeRepository), "runtimeRepository must use owner/repository format");
+  requireValue(validRuntimeRef(runtimeRef), "runtimeRef must be a full lowercase commit SHA");
+  const installer = `/tmp/prarness-cloud-environment-bootstrap-${runtimeRef}.sh`;
+  const url = `https://raw.githubusercontent.com/${runtimeRepository}/${runtimeRef}/.github/agent-pipeline/cloud-environment-bootstrap.sh`;
+  return [
+    `1. \`curl --fail --silent --show-error --location ${url} --output ${installer}\``,
+    `2. \`PRARNESS_BOOTSTRAP_REPOSITORY=${runtimeRepository} PRARNESS_BOOTSTRAP_REF=${runtimeRef} PRARNESS_BOOTSTRAP_SKIP_GITHUB_SETUP=true bash ${installer} ${repository}\``,
+    `3. \`$HOME/.local/bin/prarness-github-setup --verify ${repository}\``,
+  ];
+}
+
 function completionContract() {
   return [
     "Read the `instructions` path printed by prepare completely and follow that pinned contract through plan, implementation, self-review, validate, and publish in this same Cloud task.",
@@ -22,7 +38,7 @@ function completionContract() {
   ];
 }
 
-export function cloudPullDispatchComment(repository, issue, pr) {
+export function cloudPullDispatchComment(repository, issue, pr, runtimeRef, runtimeRepository = "donghyeon-encored/PRarness") {
   requireValue(validRepository(repository), "repository must use owner/repository format");
   requireValue(validNumber(issue) && validNumber(pr), "Cloud dispatch requires positive Issue and PR numbers");
   return [
@@ -30,14 +46,14 @@ export function cloudPullDispatchComment(repository, issue, pr) {
     "",
     "Before inspecting or editing code, run these exact commands:",
     "",
-    `1. \`$HOME/.local/bin/prarness-github-setup --verify ${repository}\``,
-    `2. \`$HOME/.local/bin/prarness-session prepare --repository ${repository} --issue ${issue} --pr ${pr} --output /tmp/prarness-session.json --codegraph-output /tmp/prarness-codegraph.json\``,
+    ...runtimeBootstrapCommands(runtimeRepository, runtimeRef, repository),
+    `4. \`$HOME/.local/bin/prarness-session prepare --repository ${repository} --issue ${issue} --pr ${pr} --output /tmp/prarness-session.json --codegraph-output /tmp/prarness-codegraph.json\``,
     "",
     ...completionContract(),
   ].join("\n");
 }
 
-export function cloudIssueDispatchComment(repository, issue, branch) {
+export function cloudIssueDispatchComment(repository, issue, branch, runtimeRef, runtimeRepository = "donghyeon-encored/PRarness") {
   requireValue(validRepository(repository), "repository must use owner/repository format");
   requireValue(validNumber(issue) && validBranch(branch, issue), "Cloud dispatch requires a managed Issue branch");
   return [
@@ -45,16 +61,16 @@ export function cloudIssueDispatchComment(repository, issue, branch) {
     "",
     "GitHub Actions prepared the branch but is not permitted to create pull requests. Before inspecting or editing code, run these exact commands:",
     "",
-    `1. \`$HOME/.local/bin/prarness-github-setup --verify ${repository}\``,
-    `2. \`$HOME/.local/bin/prarness-session prepare --repository ${repository} --issue ${issue} --branch ${branch} --output /tmp/prarness-session.json --codegraph-output /tmp/prarness-codegraph.json\``,
+    ...runtimeBootstrapCommands(runtimeRepository, runtimeRef, repository),
+    `4. \`$HOME/.local/bin/prarness-session prepare --repository ${repository} --issue ${issue} --branch ${branch} --output /tmp/prarness-session.json --codegraph-output /tmp/prarness-codegraph.json\``,
     "",
     "Prepare must use the verified repository GitHub App credential to create or reuse the canonical draft PR, bind it to the managed branch, and then perform R&R and CodeGraph analysis.",
     ...completionContract(),
   ].join("\n");
 }
 
-export function managedPullBody(repository, issue, pr, runtimeRef) {
-  requireValue(/^[0-9a-f]{40}$/.test(runtimeRef), "runtimeRef must be a full lowercase commit SHA");
+export function managedPullBody(repository, issue, pr, runtimeRef, runtimeRepository = "donghyeon-encored/PRarness") {
+  requireValue(validRuntimeRef(runtimeRef), "runtimeRef must be a full lowercase commit SHA");
   return [
     `Closes #${issue}`,
     "",
@@ -62,12 +78,13 @@ export function managedPullBody(repository, issue, pr, runtimeRef) {
     "",
     `- Source Issue: #${issue}`,
     `- Runtime SHA: \`${runtimeRef}\``,
+    `- Runtime repository: \`${runtimeRepository}\``,
     "- Dispatch mode: `human_pr_mention`",
     "",
     "이 Draft PR은 PRarness가 관리하는 작업 대기열입니다. Codex Cloud를 시작하거나 계속하려면 연결된 사람이 이 PR에 다음 댓글을 직접 작성하세요.",
     "",
     "```text",
-    cloudPullDispatchComment(repository, issue, pr),
+    cloudPullDispatchComment(repository, issue, pr, runtimeRef, runtimeRepository),
     "```",
     "",
     "Cloud 작업은 임시 request manifest를 최종 변경에서 제거하고, 검증·커밋·push·Issue/PR 상태 갱신을 완료해야 합니다.",

@@ -9,6 +9,7 @@ import { checkRepositoryCompatibility } from "./repository-check.mjs";
 
 const TRUSTED_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 const RUNTIME_REF_PATTERN = /^[0-9a-f]{40}$/;
+const DEFAULT_RUNTIME_REPOSITORY = "donghyeon-encored/PRarness";
 const LABELS = {
   "agent:approval-required": { color: "fbca04", description: "Maintainer approval is required before PRarness intake" },
   "agent:waiting-for-codex": { color: "1d76db", description: "Managed work is waiting for a human @codex task mention" },
@@ -160,7 +161,7 @@ async function getBranch(client, branch) {
   return response.status === 404 ? null : response.data;
 }
 
-async function createBootstrapBranch(client, issue, title, baseSha, baseTreeSha, branch, runtimeRef) {
+async function createBootstrapBranch(client, issue, title, baseSha, baseTreeSha, branch, runtimeRef, runtimeRepository) {
   const existing = await getBranch(client, branch);
   if (existing) {
     const manifestResponse = await client.request("GET", client.repoPath(`/contents/.prarness/requests/issue-${issue}.json?ref=${encodeURIComponent(branch)}`), { allow_statuses: [404] });
@@ -175,8 +176,8 @@ async function createBootstrapBranch(client, issue, title, baseSha, baseTreeSha,
     requireCondition(recovered?.version === 2 && recovered.repository === client.repository && recovered.issue === issue &&
       recovered.branch === branch && /^[0-9a-f]{40}$/.test(recovered.source_sha ?? ""),
     "REQUEST_MANIFEST_MISMATCH", "Existing managed branch bootstrap manifest does not match this intake request");
-    if (recovered.runtime_ref !== runtimeRef) {
-      const migrated = { ...recovered, runtime_ref: runtimeRef };
+    if (recovered.runtime_ref !== runtimeRef || String(recovered.runtime_repository ?? DEFAULT_RUNTIME_REPOSITORY) !== runtimeRepository) {
+      const migrated = { ...recovered, runtime_ref: runtimeRef, runtime_repository: runtimeRepository };
       const updated = await client.request("PUT", client.repoPath(`/contents/.prarness/requests/issue-${issue}.json`), {
         body: {
           message: `chore(prarness): migrate issue #${issue} runtime\n\nRefs #${issue}\nPRarness-Bootstrap: v2`,
@@ -202,6 +203,7 @@ async function createBootstrapBranch(client, issue, title, baseSha, baseTreeSha,
     branch,
     source_sha: baseSha,
     runtime_ref: runtimeRef,
+    runtime_repository: runtimeRepository,
     dispatch: "human_pr_mention",
   };
   const blob = await client.request("POST", client.repoPath("/git/blobs"), {
@@ -231,10 +233,10 @@ async function createBootstrapBranch(client, issue, title, baseSha, baseTreeSha,
   return { sha: commit.data.sha, source_sha: baseSha, created: true, title };
 }
 
-async function recoverExistingQueue(client, issue, record, runtimeRef) {
+async function recoverExistingQueue(client, issue, record, runtimeRef, runtimeRepository) {
   const state = record?.state;
   if (!state?.branch) return null;
-  if (state.runtime_ref !== runtimeRef) return null;
+  if (state.runtime_ref !== runtimeRef || String(state.runtime_repository ?? DEFAULT_RUNTIME_REPOSITORY) !== runtimeRepository) return null;
   requireCondition(typeof state.branch === "string" && state.branch.startsWith(`agent/issue-${issue}-`) &&
     (state.pr === null || Number.isInteger(state.pr) && state.pr > 0) && /^[0-9a-f]{40}$/.test(state.source_sha ?? "") &&
     /^[0-9a-f]{40}$/.test(state.bootstrap_sha ?? "") && /^[0-9a-f]{40}$/.test(state.runtime_ref ?? ""),
@@ -272,8 +274,10 @@ async function recoverExistingQueue(client, issue, record, runtimeRef) {
 export async function executeHostlessIntake(options = {}) {
   const repository = String(options.repository ?? process.env.GITHUB_REPOSITORY ?? "");
   const runtimeRef = String(options.runtime_ref ?? "");
+  const runtimeRepository = String(options.runtime_repository ?? DEFAULT_RUNTIME_REPOSITORY);
   requireCondition(safeRepository(repository), "INVALID_REPOSITORY", "repository must use owner/repository format");
   requireCondition(RUNTIME_REF_PATTERN.test(runtimeRef), "INVALID_RUNTIME_REF", "runtime_ref must be a reviewed full lowercase commit SHA");
+  requireCondition(safeRepository(runtimeRepository), "INVALID_RUNTIME_REPOSITORY", "runtime_repository must use owner/repository format");
   const compatibility = checkRepositoryCompatibility({
     repo: options.repo ?? ".",
     repository,
@@ -293,14 +297,14 @@ export async function executeHostlessIntake(options = {}) {
   const approved = decision.approved || trustedAssociation(issue.author_association);
   if (!approved) {
     await addLabel(client, decision.issue, "agent:approval-required");
-    const state = { version: 2, issue: decision.issue, phase: "HUMAN_APPROVAL", branch: null, pr: null, runtime_ref: runtimeRef };
+    const state = { version: 2, issue: decision.issue, phase: "HUMAN_APPROVAL", branch: null, pr: null, runtime_ref: runtimeRef, runtime_repository: runtimeRepository };
     const comment = await upsertIntakeComment(client, decision.issue,
       "PRarness intake requires a maintainer. Apply the configured run label or comment with `/agent approve-intake`.", state);
     return { version: 2, repository, operation: "approval_required", issue: decision.issue, comment_id: comment.id, state };
   }
 
   const existingRecord = await findIntakeState(client, decision.issue);
-  const existingQueue = await recoverExistingQueue(client, decision.issue, existingRecord, runtimeRef);
+  const existingQueue = await recoverExistingQueue(client, decision.issue, existingRecord, runtimeRef, runtimeRepository);
   if (existingQueue) {
     await removeLabel(client, decision.issue, "agent:approval-required");
     await addLabel(client, decision.issue, "agent:waiting-for-codex");
@@ -315,7 +319,7 @@ export async function executeHostlessIntake(options = {}) {
       "연결된 사람이 이 Issue에 다음 명령 전체를 직접 댓글로 작성하세요:",
       "",
       "```text",
-      cloudIssueDispatchComment(repository, decision.issue, existingQueue.state.branch),
+      cloudIssueDispatchComment(repository, decision.issue, existingQueue.state.branch, runtimeRef, runtimeRepository),
       "```",
     ].join("\n"), existingQueue.state);
     return {
@@ -343,7 +347,7 @@ export async function executeHostlessIntake(options = {}) {
   const baseTreeSha = String(baseResponse.data?.commit?.tree?.sha ?? "");
   requireCondition(/^[0-9a-f]{40}$/.test(baseSha) && /^[0-9a-f]{40}$/.test(baseTreeSha), "INVALID_BASE", "GitHub did not return the default branch commit and tree");
   const branch = `agent/issue-${decision.issue}-${slugify(issue.title)}`;
-  const bootstrap = await createBootstrapBranch(client, decision.issue, issue.title, baseSha, baseTreeSha, branch, runtimeRef);
+  const bootstrap = await createBootstrapBranch(client, decision.issue, issue.title, baseSha, baseTreeSha, branch, runtimeRef, runtimeRepository);
   await removeLabel(client, decision.issue, "agent:approval-required");
   await addLabel(client, decision.issue, "agent:waiting-for-codex");
   const state = {
@@ -356,6 +360,7 @@ export async function executeHostlessIntake(options = {}) {
     source_sha: bootstrap.source_sha,
     bootstrap_sha: bootstrap.sha,
     runtime_ref: runtimeRef,
+    runtime_repository: runtimeRepository,
   };
   const comment = await upsertIntakeComment(client, decision.issue, [
     `Managed branch \`${branch}\` is ready. GitHub Actions does not create the pull request.`,
@@ -363,7 +368,7 @@ export async function executeHostlessIntake(options = {}) {
     "연결된 사람이 이 Issue에 다음 명령 전체를 직접 댓글로 작성하세요:",
     "",
     "```text",
-    cloudIssueDispatchComment(repository, decision.issue, branch),
+    cloudIssueDispatchComment(repository, decision.issue, branch, runtimeRef, runtimeRepository),
     "```",
     "",
     "Codex Cloud의 저장소 GitHub App이 Draft PR을 생성하고 같은 작업에서 구현·리뷰·CI 게시까지 계속합니다.",
@@ -387,7 +392,7 @@ export async function executeHostlessIntake(options = {}) {
 
 function parseArgs(argv) {
   const result = {};
-  const allowed = new Set(["repository", "runtime_ref", "event", "event_name", "repo", "config", "result"]);
+  const allowed = new Set(["repository", "runtime_ref", "runtime_repository", "event", "event_name", "repo", "config", "result"]);
   for (let index = 0; index < argv.length; index += 1) {
     const key = argv[index];
     requireCondition(key.startsWith("--") && index + 1 < argv.length, "USAGE", "Expected --repository OWNER/REPO --runtime-ref SHA [--event FILE] [--result FILE]");
@@ -405,6 +410,7 @@ if (isMain) {
     const result = await executeHostlessIntake({
       repository: args.repository,
       runtime_ref: args.runtime_ref,
+      runtime_repository: args.runtime_repository,
       event_path: args.event,
       event_name: args.event_name,
       repo: args.repo,

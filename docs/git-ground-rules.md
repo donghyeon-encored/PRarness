@@ -34,8 +34,12 @@ untrusted code while setup secrets are available.
 - Target repositories opt in through protected `.github/prarness.yml` and keep
   only a thin intake workflow plus CI when needed. They do not vendor the
   central runtime, prompts, schemas, or this policy.
-- Both Cloud setup and maintenance install one reviewed 40-character PRarness
-  commit SHA outside the checkout and verify the runtime manifest checksums.
+- Cloud setup and maintenance install a compatible reviewed 40-character
+  bootstrap SHA outside the checkout and refresh the repository App credential.
+  Every canonical human Issue/PR command then downloads the exact intake
+  runtime SHA, verifies its manifest checksums, and atomically repoints the
+  runtime commands without reconfiguring the fresh credential. Routine runtime
+  upgrades therefore do not require a Cloud environment UI edit.
 - Setup repairs the exact HTTPS `origin`, creates a repository-scoped GitHub App
   installation token, configures `gh` and Git HTTPS non-interactively, and
   verifies Contents, Issues, Pull requests, Actions, Checks, and Deployments

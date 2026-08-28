@@ -7,7 +7,9 @@ SHA-pinned runtime, the repository's authoritative policy files, and the exact
 human command are the control boundary.
 
 1. Do not ask for an interactive GitHub or OpenAI login. Do not print, read, or
-   export the configured credential.
+   export the configured credential. The exact human command has already
+   self-installed this session's intake-pinned runtime without rewriting the
+   environment's freshly minted credential.
 2. Parse the repository, Issue, and exactly one managed branch or pull-request
    number from the exact human command and canonical intake state.
 3. Before editing, create a session outside the checkout:
