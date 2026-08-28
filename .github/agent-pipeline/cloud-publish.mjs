@@ -3,9 +3,8 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { pathToFileURL } from "node:url";
 import { analyzeRepositoryIssue } from "./cloud-analysis.mjs";
-import { evaluateRisk, matchesGlob, normalizeAgentOutput, publish, selectPrTeam, stableStringify } from "./pipeline.mjs";
+import { evaluateRisk, isDirectExecution, matchesGlob, normalizeAgentOutput, publish, selectPrTeam, stableStringify } from "./pipeline.mjs";
 import {
   createCloudGitHubClient,
   dispatchAndVerifyCi,
@@ -354,7 +353,7 @@ function parseArgs(argv) {
   return result;
 }
 
-const isMain = process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url;
+const isMain = isDirectExecution(import.meta.url);
 if (isMain) {
   try {
     const args = parseArgs(process.argv.slice(2));

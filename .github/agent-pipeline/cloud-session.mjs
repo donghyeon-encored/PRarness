@@ -4,12 +4,11 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
 import { analyzeRepositoryIssue } from "./cloud-analysis.mjs";
 import { managedPullBody } from "./cloud-contract.mjs";
 import { createCloudGitHubClient, preflightGitHubCapabilities } from "./cloud-github.mjs";
 import { publishCloudRequest } from "./cloud-publish.mjs";
-import { normalizeAgentOutput, publish, stableStringify } from "./pipeline.mjs";
+import { isDirectExecution, normalizeAgentOutput, publish, stableStringify } from "./pipeline.mjs";
 import { checkRepositoryCompatibility } from "./repository-check.mjs";
 
 const STATE_PATTERN = /<!-- prarness-intake-state:v2 (\{[^\n]*\}) -->/;
@@ -474,7 +473,7 @@ export function commandReceipt(command, result) {
   };
 }
 
-const isMain = process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url;
+const isMain = isDirectExecution(import.meta.url);
 if (isMain) {
   try {
     const args = parseArgs(process.argv.slice(2));

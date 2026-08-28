@@ -3,8 +3,7 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { basename, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
-import { parseYaml, stableStringify } from "./pipeline.mjs";
+import { isDirectExecution, parseYaml, stableStringify } from "./pipeline.mjs";
 
 const LEGACY_PUBLICATION_RULES = [
   /only a deterministic publisher may perform github writes/i,
@@ -214,7 +213,7 @@ function parseArgs(argv) {
   return result;
 }
 
-const isMain = process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url;
+const isMain = isDirectExecution(import.meta.url);
 if (isMain) {
   try {
     const args = parseArgs(process.argv.slice(2));
