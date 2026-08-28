@@ -42,8 +42,35 @@ function safeWorkflowName(value) {
     !value.startsWith("/") && !value.includes("..") && !value.includes("\\");
 }
 
+function safePattern(value) {
+  return typeof value === "string" && value && !value.startsWith("/") &&
+    !value.includes("..") && !value.includes("\\") && !value.includes("\0");
+}
+
+function stringList(value, location, pattern = null) {
+  requireCondition(Array.isArray(value), "INVALID_PRARNESS_CONFIG", `${location} must be a list`);
+  requireCondition(value.every((entry) => typeof entry === "string" && entry.trim() && !entry.includes("\0") &&
+    (!pattern || pattern(entry))), "INVALID_PRARNESS_CONFIG", `${location} contains an invalid value`);
+  requireCondition(new Set(value).size === value.length, "INVALID_PRARNESS_CONFIG", `${location} must contain unique values`);
+}
+
+function validateOwnershipPerson(person, index) {
+  const location = `ownership.people[${index}]`;
+  exactKeys(person, ["github", "active", "responsibilities", "review"], location);
+  requireCondition(typeof person.github === "string" && /^[A-Za-z0-9-]+$/.test(person.github),
+    "INVALID_PRARNESS_CONFIG", `${location}.github must be one GitHub login`);
+  if (person.active !== undefined) requireCondition(typeof person.active === "boolean", "INVALID_PRARNESS_CONFIG", `${location}.active must be boolean`);
+  exactKeys(person.responsibilities, ["domains", "labels", "keywords", "paths"], `${location}.responsibilities`);
+  for (const key of ["domains", "labels", "keywords"]) stringList(person.responsibilities[key] ?? [], `${location}.responsibilities.${key}`);
+  stringList(person.responsibilities.paths ?? [], `${location}.responsibilities.paths`, safePattern);
+  exactKeys(person.review, ["can_review", "high_risk_domains", "high_risk_paths"], `${location}.review`);
+  requireCondition(typeof person.review.can_review === "boolean", "INVALID_PRARNESS_CONFIG", `${location}.review.can_review must be boolean`);
+  stringList(person.review.high_risk_domains ?? [], `${location}.review.high_risk_domains`);
+  stringList(person.review.high_risk_paths ?? [], `${location}.review.high_risk_paths`, safePattern);
+}
+
 export function validateRepositoryConfig(config) {
-  exactKeys(config, ["version", "repository", "runtime", "dispatch", "publication", "ownership", "validation", "ci", "protected_paths"], "config");
+  exactKeys(config, ["version", "repository", "runtime", "dispatch", "publication", "ownership", "codegraph", "validation", "ci", "protected_paths"], "config");
   requireCondition(config.version === 1, "INVALID_PRARNESS_CONFIG", "config.version must be 1");
 
   if (config.repository !== undefined) {
@@ -66,10 +93,32 @@ export function validateRepositoryConfig(config) {
   const branchPrefix = String(config.publication.branch_prefix ?? "");
   requireCondition(branchPrefix === "agent/issue-", "INVALID_PRARNESS_CONFIG", "publication.branch_prefix must be agent/issue-");
 
+  requireCondition(config.ownership !== undefined, "INVALID_PRARNESS_CONFIG", "ownership must configure a source and fallback login");
   if (config.ownership !== undefined) {
-    exactKeys(config.ownership, ["source", "fallback"], "ownership");
+    exactKeys(config.ownership, ["source", "fallback", "max_issue_assignees", "max_pr_assignees", "people"], "ownership");
     requireCondition(["codeowners", "config"].includes(config.ownership.source), "INVALID_PRARNESS_CONFIG", "ownership.source must be codeowners or config");
     requireCondition(typeof config.ownership.fallback === "string" && /^[A-Za-z0-9-]+$/.test(config.ownership.fallback), "INVALID_PRARNESS_CONFIG", "ownership.fallback must be one GitHub login");
+    for (const key of ["max_issue_assignees", "max_pr_assignees"]) {
+      if (config.ownership[key] !== undefined) requireCondition(Number.isInteger(config.ownership[key]) && config.ownership[key] >= 1 && config.ownership[key] <= 5,
+        "INVALID_PRARNESS_CONFIG", `ownership.${key} must be an integer from 1 through 5`);
+    }
+    if (config.ownership.people !== undefined) {
+      requireCondition(Array.isArray(config.ownership.people) && config.ownership.people.length > 0,
+        "INVALID_PRARNESS_CONFIG", "ownership.people must be a non-empty list when provided");
+      config.ownership.people.forEach(validateOwnershipPerson);
+      const logins = config.ownership.people.map((person) => person.github.toLowerCase());
+      requireCondition(new Set(logins).size === logins.length, "INVALID_PRARNESS_CONFIG", "ownership.people contains duplicate GitHub logins");
+    }
+    requireCondition(config.ownership.source !== "config" || Array.isArray(config.ownership.people),
+      "INVALID_PRARNESS_CONFIG", "ownership.source=config requires ownership.people");
+  }
+
+  if (config.codegraph !== undefined) {
+    exactKeys(config.codegraph, ["max_files", "blame_lookback_days"], "codegraph");
+    requireCondition(Number.isInteger(config.codegraph.max_files) && config.codegraph.max_files >= 1 && config.codegraph.max_files <= 20000,
+      "INVALID_PRARNESS_CONFIG", "codegraph.max_files must be an integer from 1 through 20000");
+    requireCondition(Number.isInteger(config.codegraph.blame_lookback_days) && config.codegraph.blame_lookback_days >= 1 && config.codegraph.blame_lookback_days <= 3650,
+      "INVALID_PRARNESS_CONFIG", "codegraph.blame_lookback_days must be an integer from 1 through 3650");
   }
 
   exactKeys(config.validation, ["commands"], "validation");
@@ -115,7 +164,8 @@ export function validateRepositoryConfig(config) {
       timeout_seconds: config.ci.timeout_seconds,
     },
     protected_paths: [...(config.protected_paths?.additional ?? [])],
-    ownership: config.ownership ?? null,
+    ownership: config.ownership ? JSON.parse(JSON.stringify(config.ownership)) : null,
+    codegraph: config.codegraph ? { ...config.codegraph } : null,
   };
 }
 

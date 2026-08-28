@@ -85,8 +85,13 @@ The bootstrap PR tells the human to post:
 The task must run `prarness-session prepare` before code inspection. That
 command verifies the live Issue, canonical Actions-authored intake state,
 same-repository PR, source/bootstrap/runtime SHAs, checkout HEAD, repository
-policy, and GitHub capabilities. The pinned `prompts/cloud-session.md` then
-defines the one-commit analysis/plan/implement/review/validate/publish contract.
+policy, and GitHub capabilities. It also builds the CodeGraph, performs
+R&R-based minimal Issue assignment, and publishes the initial progress table.
+The pinned `prompts/cloud-session.md` then defines the one-commit
+analysis/plan/implement/review/validate/publish contract. Publication rebuilds
+the CodeGraph from the actual diff, selects PR assignees and a reviewer,
+recomputes deterministic risk, posts low-risk review comments, and tags the
+selected human for high-risk findings.
 
 Publication fails closed when:
 
@@ -95,6 +100,10 @@ Publication fails closed when:
 - the remote branch moved after preparation;
 - paths exceed the declared plan or touch protected files;
 - validation evidence differs from repository policy;
+- the plan/review artifacts do not match the Issue, iteration, policy commands,
+  allowed paths, or exact implementation SHA;
+- R&R cannot produce an assignable Issue owner or PR assignee;
+- a low-risk must-fix finding remains after the same-task self-review;
 - the implementation has zero/multiple commits, missing trailers, binary
   changes, renames, or more than 400 changed lines;
 - the live PR, canonical comments, or required CI checks do not reconcile.

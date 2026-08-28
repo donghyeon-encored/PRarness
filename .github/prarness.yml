@@ -14,8 +14,26 @@ publication:
   branch_prefix: agent/issue-
 
 ownership:
-  source: codeowners
+  source: config
   fallback: donghyeon-encored
+  max_issue_assignees: 1
+  max_pr_assignees: 3
+  people:
+    - github: donghyeon-encored
+      active: true
+      responsibilities:
+        domains: ["auth", "api", "frontend", "repository-governance"]
+        labels: ["area/auth", "area/backend", "area/frontend", "area/agent-pipeline"]
+        keywords: ["oauth", "login", "session", "api", "ui", "react", "accessibility", "workflow", "pipeline", "codex cloud"]
+        paths: ["**"]
+      review:
+        can_review: true
+        high_risk_domains: ["auth", "permissions", "secrets", "repository-governance"]
+        high_risk_paths: ["src/auth/**", "infra/**", ".github/workflows/**", ".github/agent-pipeline/**", "docs/git-ground-rules.md", "**/AGENTS.md"]
+
+codegraph:
+  max_files: 5000
+  blame_lookback_days: 365
 
 validation:
   commands:

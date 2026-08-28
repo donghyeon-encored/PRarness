@@ -775,6 +775,7 @@ export function selectPrTeam(team, input = {}) {
   const author = lower(input.author);
   const implementer = lower(input.implementer);
   const risk = normalizeRisk(input.risk, team.pipeline?.unknown_risk_is_high !== false);
+  const fallbackLogin = lower(team.pipeline?.fallback_assignee);
   const contributions = contributionScores(input.codegraph, paths);
 
   const candidates = team.people
@@ -801,6 +802,7 @@ export function selectPrTeam(team, input = {}) {
         can_review: person.review?.can_review === true,
         high_risk_qualified:
           risk !== "high" ||
+          login === fallbackLogin ||
           domains.some((domain) => asArray(person.review?.high_risk_domains).map(lower).includes(domain)) ||
           paths.some((filePath) => asArray(person.review?.high_risk_paths).some((pattern) => matchesGlob(filePath, pattern))),
         excluded_from_review: login === author || login === implementer,
@@ -1837,6 +1839,25 @@ function relatedFilesWithRg(repo, files, issue) {
       }
     }
   }
+  // Codex Cloud normally provides ripgrep, but the runtime contract must stay
+  // portable to minimal Linux images and target validation runners. A bounded
+  // in-process scan preserves the same evidence when rg is unavailable (and
+  // also covers filenames, which are useful signals for short Issues).
+  if (!scores.size && tokens.length) {
+    for (const filePath of files) {
+      const absolute = join(repo, ...filePath.split("/"));
+      let source = "";
+      try {
+        if (readFileSync(absolute).byteLength <= 512 * 1024) source = readFileSync(absolute, "utf8");
+      } catch {
+        source = "";
+      }
+      if (source.includes("\0")) source = "";
+      const haystack = `${filePath}\n${source}`.toLowerCase();
+      const hits = tokens.filter((token) => haystack.includes(token)).length;
+      if (hits) scores.set(filePath, hits);
+    }
+  }
   return scores;
 }
 
@@ -2777,6 +2798,7 @@ async function publishReview(client, input) {
     if (!finding.path || !finding.line || !review.reviewed_sha) continue;
     const body = [
       `**${finding.id}** · ${finding.risk} risk${finding.must_fix ? " · must fix" : ""}`,
+      finding.human_owner ? `Human owner: @${finding.human_owner}` : "",
       "",
       finding.problem,
       finding.suggested_fix ? `\nSuggested fix: ${finding.suggested_fix}` : "",

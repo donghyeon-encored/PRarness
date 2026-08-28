@@ -30,6 +30,9 @@ dispatch:
 publication:
   mode: codex_cloud_direct
   branch_prefix: agent/issue-
+ownership:
+  source: codeowners
+  fallback: maintainer
 validation:
   commands:
     - npm test

@@ -26,6 +26,12 @@ publication:
 ownership:
   source: codeowners
   fallback: MAINTAINER_LOGIN
+  max_issue_assignees: 1
+  max_pr_assignees: 3
+
+codegraph:
+  max_files: 5000
+  blame_lookback_days: 365
 
 validation:
   commands:
@@ -50,6 +56,16 @@ protected_paths:
 repository. Keep target-specific development instructions in `AGENTS.md` or
 `CLAUDE.md`, but remove copied PRarness policy and any legacy rule that blocks
 the Cloud worker's scoped Issue/branch/PR writes.
+
+With `ownership.source: codeowners`, PRarness expands the last matching
+`CODEOWNERS` rule into file-level R&R and combines it with Issue text, related
+files, recent commits, and blame evidence. The configured fallback is the
+catch-all reviewer when no more specific owner is available. Repositories that
+need label/domain/keyword routing can use `ownership.source: config` and add a
+protected `ownership.people` list. Each person declares `github`, `active`,
+`responsibilities` (`domains`, `labels`, `keywords`, `paths`), and `review`
+(`can_review`, `high_risk_domains`, `high_risk_paths`). This is repository data,
+not a copy of the central runtime.
 
 ## 2. Hostless intake workflow
 
@@ -125,8 +141,10 @@ Actions secrets or repository files.
 1. Open a trusted test Issue or apply the configured `agent:run` label.
 2. Confirm Actions creates one draft PR and one canonical Issue comment.
 3. On the draft PR, a connected human copies the documented `@codex` command.
-4. Confirm the Cloud task starts at the bootstrap head, removes the transient
-   request manifest, creates exactly one implementation commit, and pushes it.
+4. Confirm preparation assigns one Issue owner, posts the R&R/CodeGraph
+   problem-progress comment, starts at the bootstrap head, removes the
+   transient request manifest, creates exactly one implementation commit, and
+   pushes it.
 5. Accept success only when the remote branch SHA, live PR head, canonical
    comments, and all configured checks agree.
 

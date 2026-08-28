@@ -30,8 +30,9 @@ if [[ $1 == ls-remote ]]; then exit 0; fi
 exec ${JSON.stringify(realGit)} "$@"
 `);
   await writeFile(join(bin, "gh"), `#!/usr/bin/env bash
+config_dir=\${GH_CONFIG_DIR:-\${XDG_CONFIG_HOME:-$HOME/.config}/gh}
 if [[ $1 == api ]]; then
-  [[ -f "$HOME/.config/gh/hosts.yml" ]] || exit 1
+  [[ -f "$config_dir/hosts.yml" ]] || exit 1
   if [[ $2 == user ]]; then
     printf '%s\\n' "\${TEST_GH_USER:-test-user}"
     exit 0
@@ -51,7 +52,7 @@ if [[ $1 == auth && $2 == git-credential ]]; then
   [[ \${TEST_GIT_CREDENTIAL_COMPLETE:-true} == true ]] || exit 0
   credential_password=\${TEST_GIT_CREDENTIAL_PASSWORD:-}
   if [[ -z $credential_password ]]; then
-    credential_password=$(sed -n 's/^[[:space:]]*oauth_token:[[:space:]]*//p' "$HOME/.config/gh/hosts.yml" | head -1)
+    credential_password=$(sed -n 's/^[[:space:]]*oauth_token:[[:space:]]*//p' "$config_dir/hosts.yml" | head -1)
   fi
   credential_password=\${credential_password:-test-credential}
   printf '%s\\n' 'protocol=https' 'host=github.com' "username=\${TEST_GIT_CREDENTIAL_USERNAME:-x-access-token}" "password=$credential_password"
@@ -60,15 +61,22 @@ fi
 exit 7
 `);
   await chmod(join(bin, "git"), 0o755); await chmod(join(bin, "gh"), 0o755);
+  const env = { ...process.env };
+  for (const name of [
+    "CODEX_GITHUB_REPOSITORY", "GITHUB_REPOSITORY",
+    "CODEX_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN",
+    "AGENT_APP_ID", "AGENT_APP_PRIVATE_KEY", "AGENT_APP_INSTALLATION_ID",
+  ]) delete env[name];
+  Object.assign(env, {
+    HOME: home,
+    GH_CONFIG_DIR: join(home, ".config", "gh"),
+    PATH: `${bin}:${process.env.PATH}`,
+    CODEX_GITHUB_TOKEN: "github_pat_test_token",
+    TEST_REPOSITORY: repository,
+  });
   return {
     bin, head, home, repo, realGit,
-    env: {
-      ...process.env,
-      HOME: home,
-      PATH: `${bin}:${process.env.PATH}`,
-      CODEX_GITHUB_TOKEN: "github_pat_test_token",
-      TEST_REPOSITORY: repository,
-    },
+    env,
   };
 }
 
