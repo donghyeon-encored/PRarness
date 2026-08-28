@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { chmod, mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
 import {
+  createCloudGitHubClient,
   dispatchAndVerifyCi,
   manageDeployment,
   manageIssue,
@@ -64,6 +65,56 @@ ci:
 function json(data, status = 200) {
   return new Response(data == null ? null : JSON.stringify(data), { status, headers: { "content-type": "application/json" } });
 }
+
+test("Cloud GitHub client uses gh api without extracting its credential", async () => {
+  const context = await fixture();
+  const priorPath = process.env.PATH;
+  const calls = join(context.repo, "gh-calls.txt");
+  const inputs = join(context.repo, "gh-inputs.txt");
+  await writeFile(join(context.bin, "gh"), `#!/usr/bin/env bash
+set -euo pipefail
+if [[ \${1:-} != api ]]; then
+  echo 'unexpected credential extraction' >&2
+  exit 91
+fi
+printf '%s\\n' "$*" >> "$TEST_GH_CALLS"
+if [[ " $* " == *" --input - "* ]]; then
+  body=$(cat)
+  printf '%s\\n' "$body" >> "$TEST_GH_INPUTS"
+fi
+endpoint=\${!#}
+case "$endpoint" in
+  repos/owner/repo) printf '%s\\n' '{"full_name":"owner/repo"}' ;;
+  repos/owner/repo/issues) printf '%s\\n' '{"number":11}' ;;
+  repos/owner/repo/missing)
+    printf '%s\\n' '{"message":"Not Found"}'
+    echo 'gh: Not Found (HTTP 404)' >&2
+    exit 1
+    ;;
+  *) exit 92 ;;
+esac
+`);
+  await chmod(join(context.bin, "gh"), 0o755);
+  process.env.PATH = `${context.bin}:${priorPath}`;
+  process.env.TEST_GH_CALLS = calls;
+  process.env.TEST_GH_INPUTS = inputs;
+  try {
+    const { client } = createCloudGitHubClient("owner/repo", { auth_metadata: context.authMetadata });
+    const repository = await client.request("GET", client.repoPath(""));
+    assert.equal(repository.data.full_name, "owner/repo");
+    const issue = await client.request("POST", client.repoPath("/issues"), { body: { title: "Bug" } });
+    assert.equal(issue.data.number, 11);
+    const missing = await client.request("GET", client.repoPath("/missing"), { allow_statuses: [404] });
+    assert.equal(missing.status, 404);
+    assert.equal(missing.data.message, "Not Found");
+    assert.match(await readFile(calls, "utf8"), /api --hostname github\.com --method POST/);
+    assert.equal((await readFile(inputs, "utf8")).trim(), '{"title":"Bug"}');
+  } finally {
+    process.env.PATH = priorPath;
+    delete process.env.TEST_GH_CALLS;
+    delete process.env.TEST_GH_INPUTS;
+  }
+});
 
 test("preflight proves every managed GitHub write capability", async () => {
   const context = await fixture();

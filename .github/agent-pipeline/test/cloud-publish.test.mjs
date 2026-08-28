@@ -196,7 +196,14 @@ test("Cloud publisher confirms the pushed SHA and live REST pull request", async
   };
 
   try {
-    const result = await publishCloudRequest({ repo: context.repo, request: context.request, validation: context.validation, auth_metadata: context.authMetadata, poll_interval_ms: 0 });
+    const result = await publishCloudRequest({
+      repo: context.repo,
+      request: context.request,
+      validation: context.validation,
+      auth_metadata: context.authMetadata,
+      poll_interval_ms: 0,
+      fetch: globalThis.fetch,
+    });
     assert.equal(result.verified, true);
     assert.equal(result.remote_sha, context.headSha);
     assert.equal(result.pr_url, "https://github.com/owner/repo/pull/7");

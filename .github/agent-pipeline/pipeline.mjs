@@ -8,7 +8,7 @@
  * can run in a freshly checked-out repository with Node 20.
  */
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { basename, dirname, extname, join, normalize, posix, relative, resolve } from "node:path";
@@ -26,6 +26,15 @@ const MANAGED_LABELS = {
   "agent:split-required": { color: "5319e7", description: "The change must be decomposed into multiple semantic PR units" },
   "agent:done": { color: "0e8a16", description: "Agent checks passed; human review remains authoritative" },
 };
+
+export function isDirectExecution(moduleUrl, executable = process.argv[1]) {
+  if (!executable) return false;
+  try {
+    return pathToFileURL(realpathSync(resolve(executable))).href === moduleUrl;
+  } catch {
+    return false;
+  }
+}
 const PROBLEM_STATUSES = new Set([
   "OPEN",
   "PLANNED",
@@ -2527,8 +2536,12 @@ async function publishAnalysis(client, input) {
   return { operation: "analysis", issue, assignments, split: false, comment };
 }
 
-function gitAuthenticationEnv(token) {
-  const header = `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${token}`).toString("base64")}`;
+function gitAuthenticationEnv(client) {
+  if (client.usesCredentialHelper === true) {
+    return { ...process.env, GIT_TERMINAL_PROMPT: "0" };
+  }
+  invariant(client.token, "GitHub token is required when no managed credential helper is configured", "MISSING_GITHUB_TOKEN");
+  const header = `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${client.token}`).toString("base64")}`;
   return {
     ...process.env,
     GIT_CONFIG_COUNT: "1",
@@ -2639,7 +2652,7 @@ async function publishPr(client, input) {
   const sha = git(repo, ["rev-parse", "HEAD"]).stdout.trim();
   invariant(sha, "No commit is available to publish", "MISSING_COMMIT");
   if (input.push !== false) {
-    git(repo, ["push", "origin", `HEAD:refs/heads/${branch}`], { env: gitAuthenticationEnv(client.token) });
+    git(repo, ["push", "origin", `HEAD:refs/heads/${branch}`], { env: gitAuthenticationEnv(client) });
   }
 
   const base = live.default_branch;
@@ -3433,7 +3446,7 @@ export async function runCli(argv = process.argv.slice(2)) {
   throw new PipelineError(`Unknown command: ${command}. Run 'pipeline.mjs help'.`, "UNKNOWN_COMMAND");
 }
 
-const isMain = process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url;
+const isMain = isDirectExecution(import.meta.url);
 if (isMain) {
   runCli().catch((error) => {
     const result = {

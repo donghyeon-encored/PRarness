@@ -4,8 +4,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
-import { pathToFileURL } from "node:url";
-import { GitHubClient, stableStringify } from "./pipeline.mjs";
+import { GitHubClient, isDirectExecution, stableStringify } from "./pipeline.mjs";
 import { checkRepositoryCompatibility } from "./repository-check.mjs";
 
 const REQUIRED_WRITE_PERMISSIONS = ["contents", "issues", "pull_requests", "actions", "checks", "deployments"];
@@ -47,14 +46,118 @@ export function readCloudGitHubIdentity(options = {}) {
   requireCondition(metadata?.version === 1 && safeRepository(metadata.repository), "INVALID_GITHUB_IDENTITY", "Cloud GitHub authentication metadata is invalid");
   const appId = String(metadata.app_id ?? process.env.AGENT_APP_ID ?? "");
   const botLogin = String(metadata.bot_login ?? process.env.AGENT_APP_BOT_LOGIN ?? "").toLowerCase();
+  const host = String(metadata.host ?? "").toLowerCase();
+  requireCondition(/^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?(?::[1-9][0-9]{0,4})?$/.test(host),
+    "INVALID_GITHUB_IDENTITY", "Cloud GitHub authentication metadata has an invalid host");
   requireCondition(/^\d+$/.test(appId) || /^[a-z0-9](?:[a-z0-9-]{0,38})(?:\[bot\])?$/.test(botLogin),
     "MISSING_APP_IDENTITY", "Authenticated GitHub identity must provide an App ID or bot login");
   return {
     ...metadata,
+    host,
     app_id: appId,
     bot_login: botLogin,
     installation_id: metadata.installation_id == null ? null : String(metadata.installation_id),
   };
+}
+
+function parseGitHubOutput(output) {
+  const raw = String(output ?? "").trim();
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return raw;
+  }
+}
+
+function githubApiEndpoint(value, host) {
+  let endpoint = String(value ?? "");
+  if (endpoint.startsWith("http://") || endpoint.startsWith("https://")) {
+    let url;
+    try {
+      url = new URL(endpoint);
+    } catch {
+      throw new CloudGitHubError("INVALID_GITHUB_ENDPOINT", "GitHub API endpoint is invalid");
+    }
+    const allowedHost = host === "github.com" ? "api.github.com" : host.split(":")[0];
+    requireCondition(url.hostname.toLowerCase() === allowedHost, "INVALID_GITHUB_ENDPOINT", "GitHub API endpoint targets another host");
+    endpoint = `${url.pathname}${url.search}`;
+  }
+  requireCondition(endpoint.startsWith("/") && !endpoint.includes("\0") && !/[\r\n]/.test(endpoint),
+    "INVALID_GITHUB_ENDPOINT", "GitHub API endpoint must be an absolute API path");
+  if (host !== "github.com" && endpoint.startsWith("/api/v3/")) endpoint = endpoint.slice("/api/v3".length);
+  return endpoint.replace(/^\/+/, "");
+}
+
+export class GitHubCliClient {
+  constructor(options = {}) {
+    requireCondition(safeRepository(options.repository), "INVALID_REPOSITORY", "repository must use owner/repository format");
+    this.repository = options.repository;
+    this.host = options.host;
+    this.appId = String(options.app_id ?? "");
+    this.botLogin = String(options.bot_login ?? "").toLowerCase();
+    this.usesCredentialHelper = true;
+    this.execFile = options.exec_file_sync ?? execFileSync;
+  }
+
+  repoPath(suffix) {
+    const [owner, repo] = this.repository.split("/");
+    return `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}${suffix}`;
+  }
+
+  async request(method, path, options = {}) {
+    const normalizedMethod = String(method ?? "").toUpperCase();
+    requireCondition(["GET", "POST", "PATCH", "PUT", "DELETE"].includes(normalizedMethod),
+      "INVALID_GITHUB_REQUEST", "Unsupported GitHub API method");
+    const endpoint = githubApiEndpoint(path, this.host);
+    const accept = String(options.accept ?? "application/vnd.github+json");
+    requireCondition(!/[\r\n]/.test(accept), "INVALID_GITHUB_REQUEST", "GitHub API Accept header is invalid");
+    const args = [
+      "api",
+      "--hostname", this.host,
+      "--method", normalizedMethod,
+      "-H", `Accept: ${accept}`,
+      "-H", "X-GitHub-Api-Version: 2022-11-28",
+    ];
+    const body = options.body === undefined ? undefined : JSON.stringify(options.body);
+    if (body !== undefined) args.push("--input", "-");
+    args.push(endpoint);
+    try {
+      const output = this.execFile("gh", args, {
+        encoding: "utf8",
+        input: body,
+        maxBuffer: 32 * 1024 * 1024,
+        stdio: ["pipe", "pipe", "pipe"],
+        env: { ...process.env, GH_HOST: this.host },
+      });
+      return { status: output ? 200 : 204, data: parseGitHubOutput(output), headers: new Headers() };
+    } catch (error) {
+      const stderr = String(error?.stderr ?? "");
+      const statusMatch = stderr.match(/\bHTTP\s+(\d{3})\b/i);
+      if (!statusMatch) {
+        throw new CloudGitHubError("GITHUB_API_TRANSPORT_ERROR", `gh api transport failed for ${normalizedMethod} /${endpoint}`);
+      }
+      const status = Number(statusMatch[1]);
+      const data = parseGitHubOutput(error?.stdout);
+      if (new Set(options.allow_statuses ?? []).has(status)) return { status, data, headers: new Headers() };
+      const message = data && typeof data === "object" && typeof data.message === "string"
+        ? data.message
+        : `GitHub returned HTTP ${status}`;
+      throw new CloudGitHubError("GITHUB_API_ERROR", `GitHub API ${normalizedMethod} /${endpoint} failed (${status}): ${message}`);
+    }
+  }
+
+  async paginate(path, limitPages = 10) {
+    const separator = path.includes("?") ? "&" : "?";
+    const values = [];
+    for (let page = 1; page <= limitPages; page += 1) {
+      const response = await this.request("GET", `${path}${separator}per_page=100&page=${page}`);
+      const items = Array.isArray(response.data) ? response.data : [];
+      values.push(...items);
+      if (items.length < 100) break;
+    }
+    return values;
+  }
 }
 
 function ghToken() {
@@ -74,13 +177,21 @@ export function createCloudGitHubClient(repository, options = {}) {
   requireCondition(identity.repository === repository, "REPOSITORY_IDENTITY_MISMATCH", "Authenticated GitHub identity is scoped to another repository");
   return {
     identity,
-    client: new GitHubClient({
-      token: options.token ?? ghToken(),
-      repository,
-      app_id: identity.app_id,
-      bot_login: identity.bot_login,
-      fetch: options.fetch,
-    }),
+    client: options.fetch
+      ? new GitHubClient({
+        token: options.token ?? ghToken(),
+        repository,
+        app_id: identity.app_id,
+        bot_login: identity.bot_login,
+        fetch: options.fetch,
+      })
+      : new GitHubCliClient({
+        repository,
+        host: identity.host,
+        app_id: identity.app_id,
+        bot_login: identity.bot_login,
+        exec_file_sync: options.exec_file_sync,
+      }),
   };
 }
 
@@ -339,7 +450,7 @@ export async function executeGitHubOperation(request, options = {}) {
   return reconcilePublicationReceipt(request.receipt, options);
 }
 
-const isMain = process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url;
+const isMain = isDirectExecution(import.meta.url);
 if (isMain) {
   try {
     const args = parseArgs(process.argv.slice(2));
